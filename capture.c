@@ -201,11 +201,7 @@ static int              frame_count = (FRAME_COUNT);
 
 static void errno_exit(const char* s)
 {
-#ifdef PRINTF_ALL
     fprintf(stderr, "%s error %d, %s\n", s, errno, strerror(errno));
-#elif SYSLOG_ALL
-    syslog(LOG_ERROR, "%s error %d, %s\n", s, errno, strerror(errno));
-#endif
 
     exit(EXIT_FAILURE);
 }
@@ -248,11 +244,8 @@ static void dump_ppm(const void* p, int size, unsigned int tag, struct timespec*
         total += written;
     } while (total < size);
 
-#ifdef PRINTF_ALL
-    printf("wrote %d bytes\n", total);
-#elif SYSLOG_ALL
+    //printf("wrote %d bytes\n", total);
     syslog(LOG_INFO, "wrote %d bytes\n", total);
-#endif
 
     close(dumpfd);
 
@@ -284,11 +277,8 @@ static void dump_pgm(const void* p, int size, unsigned int tag, struct timespec*
         total += written;
     } while (total < size);
 
-#ifdef PRINTF_ALL
-    printf("wrote %d bytes\n", total);
-#elif SYSLOG_ALL
+    //printf("wrote %d bytes\n", total);
     syslog(LOG_INFO, "wrote %d bytes\n", total);
-#endif
 
     close(dumpfd);
 
@@ -373,11 +363,8 @@ static void process_image(const void* p, int size)
 
     framecnt++;
 
-#ifdef PRINTF_ALL
-    printf("frame %d: ", framecnt);
-#elif SYSLOG_ALL
+    //printf("frame %d: ", framecnt);
     syslog(LOG_INFO, "frame %d: ", framecnt);
-#endif
 
     // This just dumps the frame to a file now, but you could replace with whatever image
     // processing you wish.
@@ -385,11 +372,8 @@ static void process_image(const void* p, int size)
 
     if (fmt.fmt.pix.pixelformat == V4L2_PIX_FMT_GREY)
     {
-#ifdef PRINTF_ALL
-        printf("Dump graymap as-is size %d\n", size);
-#elif SYSLOG_ALL
+        //printf("Dump graymap as-is size %d\n", size);
         syslog(LOG_INFO, "Dump graymap as-is size %d\n", size);
-#endif
 
         dump_pgm(p, size, framecnt, &frame_time);
     }
@@ -413,11 +397,8 @@ static void process_image(const void* p, int size)
         {
             dump_ppm(bigbuffer, ((size * 6) / 4), framecnt, &frame_time);
 
-#ifdef PRINTF_ALL
-            printf("Dump YUYV converted to RGB size %d\n", size);
-#elif SYSLOG_ALL
+            //printf("Dump YUYV converted to RGB size %d\n", size);
             syslog(LOG_INFO, "Dump YUYV converted to RGB size %d\n", size);
-#endif
 
         }
 #else
@@ -436,11 +417,8 @@ static void process_image(const void* p, int size)
         {
             dump_pgm(bigbuffer, (size / 2), framecnt, &frame_time);
 
-#ifdef PRINTF_ALL
-            printf("Dump YUYV converted to YY size %d\n", size);
-#elif SYSLOG_ALL
+            //printf("Dump YUYV converted to YY size %d\n", size);
             syslog(LOG_INFO, "Dump YUYV converted to YY size %d\n", size);
-#endif
         }
 #endif
 
@@ -448,31 +426,21 @@ static void process_image(const void* p, int size)
 
     else if (fmt.fmt.pix.pixelformat == V4L2_PIX_FMT_RGB24)
     {
-#ifdef PRINTF_ALL
-        printf("Dump RGB as-is size %d\n", size);
-#elif SYSLOG_ALL
+        //printf("Dump RGB as-is size %d\n", size);
         syslog(LOG_INFO, "Dump RGB as-is size %d\n", size);
-#endif
 
         dump_ppm(p, size, framecnt, &frame_time);
     }
     else
     {
-#ifdef PRINTF_ALL
-        printf("ERROR - unknown dump format\n");
-#elif SYSLOG_ALL
+        //printf("ERROR - unknown dump format\n");
         syslog(LOG_ERR, "ERROR - unknown dump format\n");
-#endif
-
     }
 
     fflush(stderr);
 
-#ifdef PRINTF_ALL
     //fprintf(stderr, ".");
-#elif SYSLOG_ALL
     //syslog(LOG_ERR, ".");
-#endif
 
     fflush(stdout);
 }
@@ -528,11 +496,8 @@ static int read_frame(void)
 
 
             default:
-#ifdef PRINTF_ALL
                 //printf("mmap failure\n");
-#elif SYSLOG_ALL
                 //syslog(LOG_INFO, "mmap failure\n");
-#endif
 
                 errno_exit("VIDIOC_DQBUF");
             }
@@ -583,11 +548,8 @@ static int read_frame(void)
         break;
     }
 
-#ifdef PRINTF_ALL
     //printf("R");
-#elif SYSLOG_ALL
     //syslog(LOG_INFO, "R");
-#endif
 
     return 1;
 }
@@ -634,11 +596,8 @@ static void mainloop(void)
 
             if (0 == r)
             {
-#ifdef PRINTF_ALL
-                fprintf(stderr, "select timeout\n");
-#elif SYSLOG_ALL
+                //fprintf(stderr, "select timeout\n");
                 syslog(LOG_ERR, "select timeout\n");
-#endif
 
                 exit(EXIT_FAILURE);
             }
@@ -646,20 +605,14 @@ static void mainloop(void)
             if (read_frame())
             {
                 if (nanosleep(&read_delay, &time_error) != 0) {
-#ifdef PRINTF_ALL
-                    perror("nanosleep");
-#elif SYSLOG_ALL
+                    //perror("nanosleep");
                     syslog(LOG_ERR, "nanosleep");
-#endif
                 }
 
 
                 else {
-#ifdef PRINTF_ALL
-                    printf("time_error.tv_sec=%ld, time_error.tv_nsec=%ld\n", time_error.tv_sec, time_error.tv_nsec);
-#elif SYSLOG_ALL
+                    //printf("time_error.tv_sec=%ld, time_error.tv_nsec=%ld\n", time_error.tv_sec, time_error.tv_nsec);
                     syslog(LOG_INFO, "time_error.tv_sec=%ld, time_error.tv_nsec=%ld\n", time_error.tv_sec, time_error.tv_nsec);
-#endif
                 }
 
                 count--;
@@ -1268,7 +1221,7 @@ void* S1_frame_acquisition(void* threadp)
         S1Cnt++;
 
         ///< Begin frame acquisition
-        //mainloop();
+        mainloop();
 
         clock_gettime(MY_CLOCK, &current_time_val);
         current_realtime = realtime(&current_time_val);
