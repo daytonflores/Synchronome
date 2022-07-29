@@ -6,7 +6,7 @@
  *
  *  The original code adapted was open source from V4L2 API and had the
  *  following use and incorporation policy:
- * 
+ *
  *  This program can be used and distributed without restrictions.
  *
  *      This program is provided with the V4L2 API
@@ -39,6 +39,7 @@
 #include <pthread.h>
 #include <sched.h>
 #include <semaphore.h>
+#include <signal.h>
 #include <syslog.h>
 #include <sys/sysinfo.h>
 
@@ -69,7 +70,7 @@
 #define FALSE (0)
 #define EXIT_SUCCESS (0)
 #define EXIT_FAILURE (1)
-#define EXIT_FAILURE2 (-1)
+#define EXIT_FAILURE_N (-1)
 
 ///< Conversion values
 #define NANOSEC_PER_SEC (1000000000)
@@ -77,30 +78,19 @@
 #define MILLISEC_PER_SEC (1000)
 #define SEC_PER_MIN (60)
 
-///< Increase this if you fall behind over time
-#define CLOCK_BIAS_MICROSEC (100)
-#define CLOCK_BIAS_NANOSEC (100000)
-
 ///< Number of RT services requiring their own threads
-///< S0 - Sequencer for controlling clock
+///< - NOTE: S0 - Sequencer WILL NOT REQUIRE ITS OWN THREAD
 ///< S1 - Frame Acquisition for capturing frames of clock
 ///< S2 - Frame Difference Threshold for matrix subtraction to see if seconds hand has moved
 ///< S3 - Frame Select for selecting the "best" frame to send to Frame Write-Back buffer
 ///< S4 - Frame Process for processing the frame (in my case, to grayscale)
 ///< S5 - Frame Write-Back for writing the processed frame from buffer to FLASH
-#define NUM_OF_THREADS 6
-
-///< Define if we want to take into account absolute time in S0 Sequencer
-#define ABS_DELAY
-
-///< Define if we want to take into account drift control in S0 Sequencer
-//#define DRIFT_CONTROL
-
-///< (DT_SCALING_UNCERTAINTY_MS)*(10^9 ns/1 s)/(1 s/1000 ms)
-///< Example (1) - If 0.5 ms is desired for sleep dt scaling uncertainty, then (DT_SCALING_UNCERTAINTY_MS)*(10^9 ns/1 s)/(1000 ms/1 s) = 500000
-///<               Thus, for 0.5 ms sleep dt scaling uncertainty this would be set to 500000
-#define DT_SCALING_UNCERTAINTY_MILLISEC (0.5)
-#define DT_SCALING_UNCERTAINTY_NANOSEC (DT_SCALING_UNCERTAINTY_MILLISEC*(NANOSEC_PER_SEC/MILLISEC_PER_SEC))
+#define NUM_OF_THREADS 5
+#define S1 0
+#define S2 1
+#define S3 2
+#define S4 3
+#define S5 4
 
 ///< Desired frequencies in Hz for all S0-S5
 #define S0_FREQ (120)
@@ -117,12 +107,12 @@
 ///< How many periods S0 Sequencer should run for
 #define S0_PERIODS (S0_FREQ*S0_RUN_TIME_SEC)
 
-///< (10^9 ns)/(1 s * S0_FREQ)
-///< Example (1) - If 100 Hz is desired for the Sequencer, then (10^9 ns)/(1 s * 100 Hz) = (10^9)/(100 Hz) = 10000000
-///<               Thus, for 100 Hz this would be set to 10000000
-///< Example (2) - If 120 Hz is desired for the Sequencer, then (10^9 ns)/(1 s * 120 Hz) = (10^9)/(120 Hz) = 8333333
-///<               Thus, for 120 Hz this would be set to 8333333
-#define RTSEQ_DELAY_NSEC (NANOSEC_PER_SEC/S0_FREQ)
+///< Number of frames expected at the end of the test
+///< Example (1) - Running for 1800 sec for 1 Hz synchronome will be (S0_RUN_TIME_SEC)*(S3_FREQ) + Initial Frames = (1800 sec)*(1 Hz) + 9 Initial Frames = 1809 frames
+///<               Thus, for 1800 sec at 1 Hz selection this would be set to 1809
+///< Example (2) - Running for 180 sec for 10 Hz synchronome will be (S0_RUN_TIME_SEC)*(S3_FREQ) + Initial Frames = (180 sec)*(10 Hz) + 9 Initial Frames = 1809 frames
+///<               Thus, for 180 sec at 10 Hz selection this would be set to 1809
+#define FRAME_COUNT ((S0_RUN_TIME_SEC)*(S3_FREQ) + 9)
 
 ///< Size of buffer to hold tail syslog trace command at the end
 ///< Example (1) - tail -216000 /var/log/syslog | grep -n FinalProject > ./syslog_trace_30min.txt
@@ -139,7 +129,6 @@
 typedef struct
 {
     int threadIdx;
-    unsigned long long sequencePeriods;
 } threadParams_t;
 
 ///< POSIX thread declarations
@@ -157,23 +146,27 @@ pthread_attr_t main_attr;
 pthread_attr_t rt_sched_attr[NUM_OF_THREADS];
 
 ///< Semaphore for each service S1-S5 all controlled by S0 Sequencer
-sem_t semS1;
-sem_t semS2;
-sem_t semS3;
-sem_t semS4;
-sem_t semS5;
+sem_t sem[NUM_OF_THREADS];
 
-///< Keep track of global times in ms
-static double start_time = 0;
-static double end_time = 0;
+///< Keep track of global times
+double start_realtime;
+double end_realtime;
+struct timespec start_time_val;
 
 ///< Controls for aborting all services S0-S5
-int abortS0 = FALSE;
-int abortS1 = FALSE;
-int abortS2 = FALSE;
-int abortS3 = FALSE;
-int abortS4 = FALSE;
-int abortS5 = FALSE;
+int abort_test = FALSE;
+int abort_threads[NUM_OF_THREADS];
+
+///< Counter for S0 Sequencer
+static unsigned long long seqCnt = 0;
+
+///< timer + timer specs for S0 Sequencer
+static timer_t timer_1;
+static struct itimerspec itime = { {1,0}, {1,0} };
+static struct itimerspec last_itime;
+
+///< Store S0_PERIODS into unsigned long long
+unsigned long long sequencePeriods;
 
 /*************************************************************************
 * Insert my code above
@@ -182,29 +175,29 @@ int abortS5 = FALSE;
 // Format is used by a number of functions, so made as a file global
 static struct v4l2_format fmt;
 
-enum io_method 
+enum io_method
 {
-        IO_METHOD_READ,
-        IO_METHOD_MMAP,
-        IO_METHOD_USERPTR,
+    IO_METHOD_READ,
+    IO_METHOD_MMAP,
+    IO_METHOD_USERPTR,
 };
 
-struct buffer 
+struct buffer
 {
-        void   *start;
-        size_t  length;
+    void* start;
+    size_t  length;
 };
 
-static char            *dev_name;
+static char* dev_name;
 //static enum io_method   io = IO_METHOD_USERPTR;
 //static enum io_method   io = IO_METHOD_READ;
 static enum io_method   io = IO_METHOD_MMAP;
 static int              fd = -1;
-struct buffer          *buffers;
+struct buffer* buffers;
 static unsigned int     n_buffers;
 static int              out_buf;
-static int              force_format=1;
-static int              frame_count = (189);
+static int              force_format = 1;
+static int              frame_count = (FRAME_COUNT);
 
 static void errno_exit(const char* s)
 {
@@ -426,7 +419,7 @@ static void process_image(const void* p, int size)
             syslog(LOG_INFO, "Dump YUYV converted to RGB size %d\n", size);
 #endif
 
-}
+        }
 #else
 
         // Pixels are YU and YV alternating, so YUYV which is 4 bytes
@@ -683,225 +676,227 @@ static void mainloop(void)
 
 static void stop_capturing(void)
 {
-        enum v4l2_buf_type type;
+    enum v4l2_buf_type type;
 
-        switch (io) {
-        case IO_METHOD_READ:
-                /* Nothing to do. */
-                break;
+    switch (io) {
+    case IO_METHOD_READ:
+        /* Nothing to do. */
+        break;
 
-        case IO_METHOD_MMAP:
-        case IO_METHOD_USERPTR:
-                type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-                if (-1 == xioctl(fd, VIDIOC_STREAMOFF, &type))
-                        errno_exit("VIDIOC_STREAMOFF");
-                break;
-        }
+    case IO_METHOD_MMAP:
+    case IO_METHOD_USERPTR:
+        type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+        if (-1 == xioctl(fd, VIDIOC_STREAMOFF, &type))
+            errno_exit("VIDIOC_STREAMOFF");
+        break;
+    }
 }
 
 static void start_capturing(void)
 {
-        unsigned int i;
-        enum v4l2_buf_type type;
+    unsigned int i;
+    enum v4l2_buf_type type;
 
-        switch (io) 
+    switch (io)
+    {
+
+    case IO_METHOD_READ:
+        /* Nothing to do. */
+        break;
+
+    case IO_METHOD_MMAP:
+        for (i = 0; i < n_buffers; ++i)
         {
+            printf("allocated buffer %d\n", i);
 
-        case IO_METHOD_READ:
-                /* Nothing to do. */
-                break;
+            struct v4l2_buffer buf;
 
-        case IO_METHOD_MMAP:
-                for (i = 0; i < n_buffers; ++i) 
-                {
-                        printf("allocated buffer %d\n", i);
+            CLEAR(buf);
+            buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+            buf.memory = V4L2_MEMORY_MMAP;
+            buf.index = i;
 
-                        struct v4l2_buffer buf;
-
-                        CLEAR(buf);
-                        buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-                        buf.memory = V4L2_MEMORY_MMAP;
-                        buf.index = i;
-
-                        if (-1 == xioctl(fd, VIDIOC_QBUF, &buf))
-                                errno_exit("VIDIOC_QBUF");
-                }
-                type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-                if (-1 == xioctl(fd, VIDIOC_STREAMON, &type))
-                        errno_exit("VIDIOC_STREAMON");
-                break;
-
-        case IO_METHOD_USERPTR:
-                for (i = 0; i < n_buffers; ++i) {
-                        struct v4l2_buffer buf;
-
-                        CLEAR(buf);
-                        buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-                        buf.memory = V4L2_MEMORY_USERPTR;
-                        buf.index = i;
-                        buf.m.userptr = (unsigned long)buffers[i].start;
-                        buf.length = buffers[i].length;
-
-                        if (-1 == xioctl(fd, VIDIOC_QBUF, &buf))
-                                errno_exit("VIDIOC_QBUF");
-                }
-                type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-                if (-1 == xioctl(fd, VIDIOC_STREAMON, &type))
-                        errno_exit("VIDIOC_STREAMON");
-                break;
+            if (-1 == xioctl(fd, VIDIOC_QBUF, &buf))
+                errno_exit("VIDIOC_QBUF");
         }
+        type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+        if (-1 == xioctl(fd, VIDIOC_STREAMON, &type))
+            errno_exit("VIDIOC_STREAMON");
+        break;
+
+    case IO_METHOD_USERPTR:
+        for (i = 0; i < n_buffers; ++i) {
+            struct v4l2_buffer buf;
+
+            CLEAR(buf);
+            buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+            buf.memory = V4L2_MEMORY_USERPTR;
+            buf.index = i;
+            buf.m.userptr = (unsigned long)buffers[i].start;
+            buf.length = buffers[i].length;
+
+            if (-1 == xioctl(fd, VIDIOC_QBUF, &buf))
+                errno_exit("VIDIOC_QBUF");
+        }
+        type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+        if (-1 == xioctl(fd, VIDIOC_STREAMON, &type))
+            errno_exit("VIDIOC_STREAMON");
+        break;
+    }
 }
 
 static void uninit_device(void)
 {
-        unsigned int i;
+    unsigned int i;
 
-        switch (io) {
-        case IO_METHOD_READ:
-                free(buffers[0].start);
-                break;
+    switch (io) {
+    case IO_METHOD_READ:
+        free(buffers[0].start);
+        break;
 
-        case IO_METHOD_MMAP:
-                for (i = 0; i < n_buffers; ++i)
-                        if (-1 == munmap(buffers[i].start, buffers[i].length))
-                                errno_exit("munmap");
-                break;
+    case IO_METHOD_MMAP:
+        for (i = 0; i < n_buffers; ++i)
+            if (-1 == munmap(buffers[i].start, buffers[i].length))
+                errno_exit("munmap");
+        break;
 
-        case IO_METHOD_USERPTR:
-                for (i = 0; i < n_buffers; ++i)
-                        free(buffers[i].start);
-                break;
-        }
+    case IO_METHOD_USERPTR:
+        for (i = 0; i < n_buffers; ++i)
+            free(buffers[i].start);
+        break;
+    }
 
-        free(buffers);
+    free(buffers);
 }
 
 static void init_read(unsigned int buffer_size)
 {
-        buffers = calloc(1, sizeof(*buffers));
+    buffers = calloc(1, sizeof(*buffers));
 
-        if (!buffers) 
-        {
-                fprintf(stderr, "Out of memory\n");
+    if (!buffers)
+    {
+        fprintf(stderr, "Out of memory\n");
 
-                exit(EXIT_FAILURE);
-        }
+        exit(EXIT_FAILURE);
+    }
 
-        buffers[0].length = buffer_size;
-        buffers[0].start = malloc(buffer_size);
+    buffers[0].length = buffer_size;
+    buffers[0].start = malloc(buffer_size);
 
-        if (!buffers[0].start) 
-        {
-                fprintf(stderr, "Out of memory\n");
+    if (!buffers[0].start)
+    {
+        fprintf(stderr, "Out of memory\n");
 
-                exit(EXIT_FAILURE);
-        }
+        exit(EXIT_FAILURE);
+    }
 }
 
 static void init_mmap(void)
 {
-        struct v4l2_requestbuffers req;
+    struct v4l2_requestbuffers req;
 
-        CLEAR(req);
+    CLEAR(req);
 
-        req.count = 6;
-        req.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-        req.memory = V4L2_MEMORY_MMAP;
+    req.count = 6;
+    req.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+    req.memory = V4L2_MEMORY_MMAP;
 
-        if (-1 == xioctl(fd, VIDIOC_REQBUFS, &req)) 
+    if (-1 == xioctl(fd, VIDIOC_REQBUFS, &req))
+    {
+        if (EINVAL == errno)
         {
-                if (EINVAL == errno) 
-                {
-                        fprintf(stderr, "%s does not support "
-                            "memory mapping\n", dev_name);
+            fprintf(stderr, "%s does not support "
+                "memory mapping\n", dev_name);
 
-                        exit(EXIT_FAILURE);
-                } else 
-                {
-                        errno_exit("VIDIOC_REQBUFS");
-                }
+            exit(EXIT_FAILURE);
         }
-
-        if (req.count < 2) 
+        else
         {
-                fprintf(stderr, "Insufficient buffer memory on %s\n", dev_name);
-
-                exit(EXIT_FAILURE);
+            errno_exit("VIDIOC_REQBUFS");
         }
+    }
 
-        buffers = calloc(req.count, sizeof(*buffers));
+    if (req.count < 2)
+    {
+        fprintf(stderr, "Insufficient buffer memory on %s\n", dev_name);
 
-        if (!buffers) 
-        {
-                fprintf(stderr, "Out of memory\n");
+        exit(EXIT_FAILURE);
+    }
 
-                exit(EXIT_FAILURE);
-        }
+    buffers = calloc(req.count, sizeof(*buffers));
 
-        for (n_buffers = 0; n_buffers < req.count; ++n_buffers) {
-                struct v4l2_buffer buf;
+    if (!buffers)
+    {
+        fprintf(stderr, "Out of memory\n");
 
-                CLEAR(buf);
+        exit(EXIT_FAILURE);
+    }
 
-                buf.type        = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-                buf.memory      = V4L2_MEMORY_MMAP;
-                buf.index       = n_buffers;
+    for (n_buffers = 0; n_buffers < req.count; ++n_buffers) {
+        struct v4l2_buffer buf;
 
-                if (-1 == xioctl(fd, VIDIOC_QUERYBUF, &buf))
-                        errno_exit("VIDIOC_QUERYBUF");
+        CLEAR(buf);
 
-                buffers[n_buffers].length = buf.length;
-                buffers[n_buffers].start =
-                        mmap(NULL /* start anywhere */,
-                              buf.length,
-                              PROT_READ | PROT_WRITE /* required */,
-                              MAP_SHARED /* recommended */,
-                              fd, buf.m.offset);
+        buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+        buf.memory = V4L2_MEMORY_MMAP;
+        buf.index = n_buffers;
 
-                if (MAP_FAILED == buffers[n_buffers].start)
-                        errno_exit("mmap");
-        }
+        if (-1 == xioctl(fd, VIDIOC_QUERYBUF, &buf))
+            errno_exit("VIDIOC_QUERYBUF");
+
+        buffers[n_buffers].length = buf.length;
+        buffers[n_buffers].start =
+            mmap(NULL /* start anywhere */,
+                buf.length,
+                PROT_READ | PROT_WRITE /* required */,
+                MAP_SHARED /* recommended */,
+                fd, buf.m.offset);
+
+        if (MAP_FAILED == buffers[n_buffers].start)
+            errno_exit("mmap");
+    }
 }
 
 static void init_userp(unsigned int buffer_size)
 {
-        struct v4l2_requestbuffers req;
+    struct v4l2_requestbuffers req;
 
-        CLEAR(req);
+    CLEAR(req);
 
-        req.count  = 4;
-        req.type   = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-        req.memory = V4L2_MEMORY_USERPTR;
+    req.count = 4;
+    req.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+    req.memory = V4L2_MEMORY_USERPTR;
 
-        if (-1 == xioctl(fd, VIDIOC_REQBUFS, &req)) {
-                if (EINVAL == errno) {
-                        fprintf(stderr, "%s does not support "
-                            "user pointer i/o\n", dev_name);
+    if (-1 == xioctl(fd, VIDIOC_REQBUFS, &req)) {
+        if (EINVAL == errno) {
+            fprintf(stderr, "%s does not support "
+                "user pointer i/o\n", dev_name);
 
-                        exit(EXIT_FAILURE);
-                } else {
-                        errno_exit("VIDIOC_REQBUFS");
-                }
+            exit(EXIT_FAILURE);
         }
-
-        buffers = calloc(4, sizeof(*buffers));
-
-        if (!buffers) {
-                fprintf(stderr, "Out of memory\n");
-
-                exit(EXIT_FAILURE);
+        else {
+            errno_exit("VIDIOC_REQBUFS");
         }
+    }
 
-        for (n_buffers = 0; n_buffers < 4; ++n_buffers) {
-                buffers[n_buffers].length = buffer_size;
-                buffers[n_buffers].start = malloc(buffer_size);
+    buffers = calloc(4, sizeof(*buffers));
 
-                if (!buffers[n_buffers].start) {
-                        fprintf(stderr, "Out of memory\n");
-                        
-                        exit(EXIT_FAILURE);
-                }
+    if (!buffers) {
+        fprintf(stderr, "Out of memory\n");
+
+        exit(EXIT_FAILURE);
+    }
+
+    for (n_buffers = 0; n_buffers < 4; ++n_buffers) {
+        buffers[n_buffers].length = buffer_size;
+        buffers[n_buffers].start = malloc(buffer_size);
+
+        if (!buffers[n_buffers].start) {
+            fprintf(stderr, "Out of memory\n");
+
+            exit(EXIT_FAILURE);
         }
+    }
 }
 
 static void init_device(void)
@@ -921,7 +916,7 @@ static void init_device(void)
         }
         else
         {
-                errno_exit("VIDIOC_QUERYCAP");
+            errno_exit("VIDIOC_QUERYCAP");
         }
     }
 
@@ -935,26 +930,26 @@ static void init_device(void)
 
     switch (io)
     {
-        case IO_METHOD_READ:
-            if (!(cap.capabilities & V4L2_CAP_READWRITE))
-            {
-                fprintf(stderr, "%s does not support read i/o\n",
-                    dev_name);
+    case IO_METHOD_READ:
+        if (!(cap.capabilities & V4L2_CAP_READWRITE))
+        {
+            fprintf(stderr, "%s does not support read i/o\n",
+                dev_name);
 
-                exit(EXIT_FAILURE);
-            }
-            break;
+            exit(EXIT_FAILURE);
+        }
+        break;
 
-        case IO_METHOD_MMAP:
-        case IO_METHOD_USERPTR:
-            if (!(cap.capabilities & V4L2_CAP_STREAMING))
-            {
-                fprintf(stderr, "%s does not support streaming i/o\n",
-                    dev_name);
+    case IO_METHOD_MMAP:
+    case IO_METHOD_USERPTR:
+        if (!(cap.capabilities & V4L2_CAP_STREAMING))
+        {
+            fprintf(stderr, "%s does not support streaming i/o\n",
+                dev_name);
 
-                exit(EXIT_FAILURE);
-            }
-            break;
+            exit(EXIT_FAILURE);
+        }
+        break;
     }
 
 
@@ -974,12 +969,12 @@ static void init_device(void)
         {
             switch (errno)
             {
-                case EINVAL:
-                    /* Cropping not supported. */
-                    break;
-                default:
-                    /* Errors ignored. */
-                        break;
+            case EINVAL:
+                /* Cropping not supported. */
+                break;
+            default:
+                /* Errors ignored. */
+                break;
             }
         }
 
@@ -996,10 +991,10 @@ static void init_device(void)
 
     if (force_format)
     {
-        syslog(LOG_INFO, "FinalProject (MAIN): FORCING FORMAT\n");
-        
-        fmt.fmt.pix.width       = HRES;
-        fmt.fmt.pix.height      = VRES;
+        syslog(LOG_INFO, "FinalProject (MAIN):                           FORCING FORMAT\n");
+
+        fmt.fmt.pix.width = HRES;
+        fmt.fmt.pix.height = VRES;
 
         // Specify the Pixel Coding Formate here
 
@@ -1014,83 +1009,83 @@ static void init_device(void)
         //fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_RGB24;
 
         //fmt.fmt.pix.field       = V4L2_FIELD_INTERLACED;
-        fmt.fmt.pix.field       = V4L2_FIELD_NONE;
+        fmt.fmt.pix.field = V4L2_FIELD_NONE;
 
         if (-1 == xioctl(fd, VIDIOC_S_FMT, &fmt))
-                errno_exit("VIDIOC_S_FMT");
+            errno_exit("VIDIOC_S_FMT");
 
         /* Note VIDIOC_S_FMT may change width and height. */
     }
     else
     {
         syslog(LOG_INFO, "FinalProject (MAIN): ASSUMING FORMAT\n");
-        
+
         /* Preserve original settings as set by v4l2-ctl for example */
         if (-1 == xioctl(fd, VIDIOC_G_FMT, &fmt))
-                    errno_exit("VIDIOC_G_FMT");
+            errno_exit("VIDIOC_G_FMT");
     }
 
     /* Buggy driver paranoia. */
     min = fmt.fmt.pix.width * 2;
     if (fmt.fmt.pix.bytesperline < min)
-            fmt.fmt.pix.bytesperline = min;
+        fmt.fmt.pix.bytesperline = min;
     min = fmt.fmt.pix.bytesperline * fmt.fmt.pix.height;
     if (fmt.fmt.pix.sizeimage < min)
-            fmt.fmt.pix.sizeimage = min;
+        fmt.fmt.pix.sizeimage = min;
 
     switch (io)
     {
-        case IO_METHOD_READ:
-            init_read(fmt.fmt.pix.sizeimage);
-            break;
+    case IO_METHOD_READ:
+        init_read(fmt.fmt.pix.sizeimage);
+        break;
 
-        case IO_METHOD_MMAP:
-            init_mmap();
-            break;
+    case IO_METHOD_MMAP:
+        init_mmap();
+        break;
 
-        case IO_METHOD_USERPTR:
-            init_userp(fmt.fmt.pix.sizeimage);
-            break;
+    case IO_METHOD_USERPTR:
+        init_userp(fmt.fmt.pix.sizeimage);
+        break;
     }
 }
 
 
 static void close_device(void)
 {
-        if (-1 == close(fd))
-                errno_exit("close");
+    if (-1 == close(fd))
+        errno_exit("close");
 
-        fd = -1;
+    fd = -1;
 }
 
 static void open_device(void)
 {
-        struct stat st;
+    struct stat st;
 
-        if (-1 == stat(dev_name, &st)) {
-            fprintf(stderr, "Cannot identify '%s': %d, %s\n",
-                dev_name, errno, strerror(errno));
+    if (-1 == stat(dev_name, &st)) {
+        fprintf(stderr, "Cannot identify '%s': %d, %s\n",
+            dev_name, errno, strerror(errno));
 
-                exit(EXIT_FAILURE);
-        }
+        exit(EXIT_FAILURE);
+    }
 
-        if (!S_ISCHR(st.st_mode)) {
-                fprintf(stderr, "%s is no device\n", dev_name);
-                
-                exit(EXIT_FAILURE);
-        }
+    if (!S_ISCHR(st.st_mode)) {
+        fprintf(stderr, "%s is no device\n", dev_name);
 
-        fd = open(dev_name, O_RDWR /* required */ | O_NONBLOCK, 0);
+        exit(EXIT_FAILURE);
+    }
 
-        if (-1 == fd) {
-                fprintf(stderr, "Cannot open '%s': %d, %s\n",
-                    dev_name, errno, strerror(errno));
+    fd = open(dev_name, O_RDWR /* required */ | O_NONBLOCK, 0);
 
-                exit(EXIT_FAILURE);
-        }
+    if (-1 == fd) {
+        fprintf(stderr, "Cannot open '%s': %d, %s\n",
+            dev_name, errno, strerror(errno));
+
+        exit(EXIT_FAILURE);
+    }
 }
 
-static void usage(FILE *fp, int argc, char **argv)
+static void usage(FILE* fp, int argc, char** argv)
 {
     fprintf(fp,
         "Usage: %s [options]\n\n"
@@ -1160,11 +1155,14 @@ void get_cpu_core_config(void)
 double getTimeMsec(void)
 {
     struct timespec event_ts = { 0, 0 };
-    double event_time = 0;
 
-    clock_gettime(CLOCK_REALTIME, &event_ts);
-    event_time = ((event_ts.tv_sec) + ((event_ts.tv_nsec) / (double)NANOSEC_PER_SEC));
-    return (event_time - start_time);
+    clock_gettime(MY_CLOCK, &event_ts);
+    return ((event_ts.tv_sec) * 1000.0) + ((event_ts.tv_nsec) / 1000000.0);
+}
+
+double realtime(struct timespec* tsptr)
+{
+    return ((double)(tsptr->tv_sec) + (((double)tsptr->tv_nsec) / 1000000000.0));
 }
 
 void print_scheduler(void)
@@ -1176,138 +1174,106 @@ void print_scheduler(void)
     switch (schedType)
     {
     case SCHED_FIFO:
-        printf("Pthread Policy is SCHED_FIFO\n");
+        printf("Pthread Policy is SCHED_FIFO on CPU=%d\n", sched_getcpu());
         break;
     case SCHED_OTHER:
-        printf("Pthread Policy is SCHED_OTHER\n");
+        printf("Pthread Policy is SCHED_OTHER on CPU=%d\n", sched_getcpu());
         break;
     case SCHED_RR:
-        printf("Pthread Policy is SCHED_RR\n");
+        printf("Pthread Policy is SCHED_RR on CPU=%d\n", sched_getcpu());
         break;
-    //case SCHED_DEADLINE:
-        //printf("Pthread Policy is SCHED_DEADLINE\n");
-        //break;
+        //case SCHED_DEADLINE:
+            //printf("Pthread Policy is SCHED_DEADLINE on CPU=%d\n", sched_getcpu());
+            //break;
     default:
-        printf("Pthread Policy is UNKNOWN\n");
+        printf("Pthread Policy is UNKNOWN on CPU=%d\n", sched_getcpu());
     }
 }
 
 void* S0_sequencer(void* threadp)
 {
-    struct timespec delay_time = { 0, RTSEQ_DELAY_NSEC };
-    struct timespec std_delay_time = { 0, RTSEQ_DELAY_NSEC };
-    struct timespec current_time_val = { 0,0 };
+    struct timespec current_time_val;
+    double current_realtime;
+    int rc, flags = 0;
+    int i;
 
-    struct timespec remaining_time;
-    double current_time, last_time, scaleDelay;
-    double delta_t = (RTSEQ_DELAY_NSEC / (double)NANOSEC_PER_SEC);
-    double scale_dt;
-    int rc, delay_cnt = 0;
-    unsigned long long seqCnt = 0;
-    threadParams_t* threadParams = (threadParams_t*)threadp;
+    ///< Entering here means we received interval timer signal
 
-    current_time = getTimeMsec(); last_time = current_time - delta_t;
+    seqCnt++;
 
-    syslog(LOG_CRIT, "FinalProject (S0_sequencer):                   start on CPU=%d @ sec=%lf after %lf with dt=%lf\n", sched_getcpu(), current_time, last_time, delta_t);
+    //clock_gettime(MY_CLOCK_TYPE, &current_time_val); current_realtime=realtime(&current_time_val);
+    //printf("Sequencer on core %d for cycle %llu @ sec=%6.9lf\n", sched_getcpu(), seqCnt, current_realtime-start_realtime);
+    //syslog(LOG_CRIT, "Sequencer on core %d for cycle %llu @ sec=%6.9lf\n", sched_getcpu(), seqCnt, current_realtime-start_realtime);
 
-    do
+    ///< Post semaphore for S1 Frame Acquisition at a derivative frequency of S0 Sequencer
+    if ((seqCnt % (int)(S0_FREQ/S1_FREQ)) == 0) {
+        sem_post(&sem[0]);
+    }
+
+    ///< Post semaphore for S2 Frame Difference Threshold at a derivative frequency of S0 Sequencer
+    if ((seqCnt % (int)(S0_FREQ/S2_FREQ)) == 0) {
+        sem_post(&sem[1]);
+    }
+
+    ///< Post semaphore for S3 Frame Selection at a derivative frequency of S0 Sequencer
+    if ((seqCnt % (int)(S0_FREQ/S3_FREQ)) == 0) {
+        sem_post(&sem[2]);
+    }
+
+    ///< Post semaphore for S4 Frame Process at a derivative frequency of S0 Sequencer
+    if ((seqCnt % (int)(S0_FREQ/S4_FREQ)) == 0) {
+        sem_post(&sem[3]);
+    }
+
+    ///< Post semaphore for S5 Frame Write-Back at a derivative frequency of S0 Sequencer
+    if ((seqCnt % (int)(S0_FREQ/S5_FREQ)) == 0) {
+        sem_post(&sem[4]);
+    }
+
+    if (abort_test || (seqCnt >= sequencePeriods))
     {
-        current_time = getTimeMsec(); delay_cnt = 0;
+        ///< Disable interval timer
+        itime.it_interval.tv_sec = 0;
+        itime.it_interval.tv_nsec = 0;
+        itime.it_value.tv_sec = 0;
+        itime.it_value.tv_nsec = 0;
+        timer_settime(timer_1, flags, &itime, &last_itime);
+        printf("Disabling S0 Sequencer interval timer with abort=%d and Sequence Count %llu of Sequence Period %lld\n", abort_test, seqCnt, sequencePeriods);
 
-#ifdef DRIFT_CONTROL
-        scale_dt = (current_time - last_time) - delta_t;
-        delay_time.tv_nsec = std_delay_time.tv_nsec - (scale_dt * (NANOSEC_PER_SEC + DT_SCALING_UNCERTAINTY_NANOSEC)) - CLOCK_BIAS_NANOSEC;
-        //syslog(LOG_CRIT, "FinalProject (S0_sequencer):                   scale dt=%lf on CPU=%d @ sec=%lf after=%lf with dt=%lf\n", scale_dt, sched_getcpu(), current_time, last_time, delta_t);
-#else
-        delay_time = std_delay_time; scale_dt = delta_t;
-#endif
-
-
-#ifdef ABS_DELAY
-        clock_gettime(MY_CLOCK, &current_time_val);
-        delay_time.tv_sec = current_time_val.tv_sec;
-        delay_time.tv_nsec = current_time_val.tv_nsec + delay_time.tv_nsec;
-
-        if (delay_time.tv_nsec > NANOSEC_PER_SEC)
-        {
-            delay_time.tv_sec = delay_time.tv_sec + 1;
-            delay_time.tv_nsec = delay_time.tv_nsec - NANOSEC_PER_SEC;
+        ///< Shutdown all services
+        for (i = 0; i < NUM_OF_THREADS; i++) {
+            sem_post(&sem[i]);
+            abort_threads[i] = TRUE;
         }
-        //syslog(LOG_CRIT, "FinalProject (S0_sequencer):                   cycle   %06llu on CPU=%d, delay for dt=%lf @ sec=%d, nsec=%d to sec=%d, nsec=%d\n", seqCnt, sched_getcpu(), scale_dt, current_time_val.tv_sec, current_time_val.tv_nsec, delay_time.tv_sec, delay_time.tv_nsec);
-#endif
+    }
 
-
-        // Delay loop with check for early wake-up
-        do
-        {
-#ifdef ABS_DELAY
-            rc = clock_nanosleep(MY_CLOCK, TIMER_ABSTIME, &delay_time, (struct timespec*)0);
-#else
-            rc = clock_nanosleep(MY_CLOCK, 0, &delay_time, &remaining_time);
-#endif
-
-            if (rc == EINTR)
-            {
-                syslog(LOG_CRIT, "FinalProject (S0_sequencer):                   EINTR @ sec=%lf\n", current_time);
-                delay_cnt++;
-            }
-            else if (rc < EXIT_SUCCESS)
-            {
-                perror("FinalProject (S0_sequencer): nanosleep");
-                exit(EXIT_FAILURE2);
-            }
-
-            //syslog(LOG_CRIT, "FinalProject (S0_sequencer): WOKE UP\n");
-
-        } while (rc == EINTR);
-
-
-        syslog(LOG_CRIT, "FinalProject (S0_sequencer):                   cycle   %06llu on CPU=%d @ sec=%lf, last=%lf, dt=%lf, sdt=%lf\n", seqCnt, sched_getcpu(), current_time, last_time, (current_time - last_time), scale_dt);
-
-        // Release each service at a sub-rate of the generic sequencer rate
-
-        // S1 Frame Acquisition
-        if ((seqCnt % (int)(S0_FREQ/S1_FREQ)) == 0) sem_post(&semS1);
-
-        // S2 Frame Difference Threshold
-        if ((seqCnt % (int)(S0_FREQ/S2_FREQ)) == 0) sem_post(&semS2);
-
-        // S3 Frame Select
-        if ((seqCnt % (int)(S0_FREQ/S3_FREQ)) == 0) sem_post(&semS3);
-
-        // S4 Frame Process
-        if ((seqCnt % (int)(S0_FREQ/S4_FREQ)) == 0) sem_post(&semS4);
-
-        // S5 Frame Write-Back
-        if ((seqCnt % (int)(S0_FREQ/S5_FREQ)) == 0) sem_post(&semS5);
-
-        seqCnt++;
-        last_time = current_time;
-
-    } while (!abortS0 && (seqCnt < threadParams->sequencePeriods));
-
-    sem_post(&semS1); sem_post(&semS2); sem_post(&semS3); sem_post(&semS4); sem_post(&semS5);
-    abortS1 = TRUE; abortS2 = TRUE; abortS3 = TRUE; abortS4 = TRUE; abortS5 = TRUE;
-
-    pthread_exit((void*)0);
 }
 
 void* S1_frame_acquisition(void* threadp)
 {
-    double current_time;
+    struct timespec current_time_val;
+    double current_realtime;
     unsigned long long S1Cnt = 0;
     threadParams_t* threadParams = (threadParams_t*)threadp;
 
-    current_time = getTimeMsec();
-    syslog(LOG_CRIT, "FinalProject (S1_frame_acquisition):           start on CPU=%d @ sec=%lf\n", sched_getcpu(), current_time);
+    ///< Start up processing and resource initialization
+    clock_gettime(MY_CLOCK, &current_time_val);
+    current_realtime = realtime(&current_time_val);
 
-    while (!abortS1)
+    syslog(LOG_CRIT, "FinalProject (S1_frame_acquisition):           start on CPU=%d @ sec=%lf\n", sched_getcpu(), current_realtime - start_realtime);
+
+    while (!abort_threads[S1])
     {
-        sem_wait(&semS1);
+        sem_wait(&sem[S1]);
         S1Cnt++;
 
-        current_time = getTimeMsec();
-        syslog(LOG_CRIT, "FinalProject (S1_frame_acquisition):           release %06llu on CPU=%d @ sec=%lf\n", S1Cnt, sched_getcpu(), current_time);
+        ///< Begin frame acquisition
+        //mainloop();
+
+        clock_gettime(MY_CLOCK, &current_time_val);
+        current_realtime = realtime(&current_time_val);
+
+        syslog(LOG_CRIT, "FinalProject (S1_frame_acquisition):           release %06llu on CPU=%d @ sec=%lf\n", S1Cnt, sched_getcpu(), current_realtime - start_realtime);
     }
 
     pthread_exit((void*)0);
@@ -1315,20 +1281,26 @@ void* S1_frame_acquisition(void* threadp)
 
 void* S2_frame_difference_threshold(void* threadp)
 {
-    double current_time;
+    struct timespec current_time_val;
+    double current_realtime;
     unsigned long long S2Cnt = 0;
     threadParams_t* threadParams = (threadParams_t*)threadp;
 
-    current_time = getTimeMsec();
-    syslog(LOG_CRIT, "FinalProject (S2_frame_difference_threshold):  start on CPU=%d @ sec=%lf\n", sched_getcpu(), current_time);
+    ///< Start up processing and resource initialization
+    clock_gettime(MY_CLOCK, &current_time_val);
+    current_realtime = realtime(&current_time_val);
 
-    while (!abortS2)
+    syslog(LOG_CRIT, "FinalProject (S2_frame_difference_threshold):  start on CPU=%d @ sec=%lf\n", sched_getcpu(), current_realtime - start_realtime);
+
+    while (!abort_threads[S2])
     {
-        sem_wait(&semS2);
+        sem_wait(&sem[S2]);
         S2Cnt++;
 
-        current_time = getTimeMsec();
-        syslog(LOG_CRIT, "FinalProject (S2_frame_difference_threshold):  release %06llu on CPU=%d @ sec=%lf\n", S2Cnt, sched_getcpu(), current_time);
+        clock_gettime(MY_CLOCK, &current_time_val);
+        current_realtime = realtime(&current_time_val);
+
+        syslog(LOG_CRIT, "FinalProject (S2_frame_difference_threshold):  release %06llu on CPU=%d @ sec=%lf\n", S2Cnt, sched_getcpu(), current_realtime - start_realtime);
     }
 
     pthread_exit((void*)0);
@@ -1336,20 +1308,26 @@ void* S2_frame_difference_threshold(void* threadp)
 
 void* S3_frame_select(void* threadp)
 {
-    double current_time;
+    struct timespec current_time_val;
+    double current_realtime;
     unsigned long long S3Cnt = 0;
     threadParams_t* threadParams = (threadParams_t*)threadp;
 
-    current_time = getTimeMsec();
-    syslog(LOG_CRIT, "FinalProject (S3_frame_select):                start on CPU=%d @ sec=%lf\n", sched_getcpu(), current_time);
+    ///< Start up processing and resource initialization
+    clock_gettime(MY_CLOCK, &current_time_val);
+    current_realtime = realtime(&current_time_val);
 
-    while (!abortS3)
+    syslog(LOG_CRIT, "FinalProject (S3_frame_select):                start on CPU=%d @ sec=%lf\n", sched_getcpu(), current_realtime - start_realtime);
+
+    while (!abort_threads[S3])
     {
-        sem_wait(&semS3);
+        sem_wait(&sem[S3]);
         S3Cnt++;
 
-        current_time = getTimeMsec();
-        syslog(LOG_CRIT, "FinalProject (S3_frame_select):                release %06llu on CPU=%d @ sec=%lf\n", S3Cnt, sched_getcpu(), current_time);
+        clock_gettime(MY_CLOCK, &current_time_val);
+        current_realtime = realtime(&current_time_val);
+
+        syslog(LOG_CRIT, "FinalProject (S3_frame_select):                release %06llu on CPU=%d @ sec=%lf\n", S3Cnt, sched_getcpu(), current_realtime - start_realtime);
     }
 
     pthread_exit((void*)0);
@@ -1357,20 +1335,26 @@ void* S3_frame_select(void* threadp)
 
 void* S4_frame_process(void* threadp)
 {
-    double current_time;
+    struct timespec current_time_val;
+    double current_realtime;
     unsigned long long S4Cnt = 0;
     threadParams_t* threadParams = (threadParams_t*)threadp;
 
-    current_time = getTimeMsec();
-    syslog(LOG_CRIT, "FinalProject (S4_frame_process):               start on CPU=%d @ sec=%lf\n", sched_getcpu(), current_time);
+    ///< Start up processing and resource initialization
+    clock_gettime(MY_CLOCK, &current_time_val);
+    current_realtime = realtime(&current_time_val);
 
-    while (!abortS4)
+    syslog(LOG_CRIT, "FinalProject (S4_frame_process):               start on CPU=%d @ sec=%lf\n", sched_getcpu(), current_realtime - start_realtime);
+
+    while (!abort_threads[S4])
     {
-        sem_wait(&semS4);
+        sem_wait(&sem[S4]);
         S4Cnt++;
 
-        current_time = getTimeMsec();
-        syslog(LOG_CRIT, "FinalProject (S4_frame_process):               release %06llu on CPU=%d @ sec=%lf\n", S4Cnt, sched_getcpu(), current_time);
+        clock_gettime(MY_CLOCK, &current_time_val);
+        current_realtime = realtime(&current_time_val);
+
+        syslog(LOG_CRIT, "FinalProject (S4_frame_process):               release %06llu on CPU=%d @ sec=%lf\n", S4Cnt, sched_getcpu(), current_realtime - start_realtime);
     }
 
     pthread_exit((void*)0);
@@ -1378,20 +1362,26 @@ void* S4_frame_process(void* threadp)
 
 void* S5_frame_writeback(void* threadp)
 {
-    double current_time;
+    struct timespec current_time_val;
+    double current_realtime;
     unsigned long long S5Cnt = 0;
     threadParams_t* threadParams = (threadParams_t*)threadp;
 
-    current_time = getTimeMsec();
-    syslog(LOG_CRIT, "FinalProject (S5_frame_writeback):             start on CPU=%d @ sec=%lf\n", sched_getcpu(), current_time);
+    ///< Start up processing and resource initialization
+    clock_gettime(MY_CLOCK, &current_time_val);
+    current_realtime = realtime(&current_time_val);
 
-    while (!abortS5)
+    syslog(LOG_CRIT, "FinalProject (S5_frame_writeback):             start on CPU=%d @ sec=%lf\n", sched_getcpu(), current_realtime - start_realtime);
+
+    while (!abort_threads[S5])
     {
-        sem_wait(&semS5);
+        sem_wait(&sem[S5]);
         S5Cnt++;
 
-        current_time = getTimeMsec();
-        syslog(LOG_CRIT, "FinalProject (S5_frame_writeback):             release %06llu on CPU=%d @ sec=%lf\n", S5Cnt, sched_getcpu(), current_time);
+        clock_gettime(MY_CLOCK, &current_time_val);
+        current_realtime = realtime(&current_time_val);
+
+        syslog(LOG_CRIT, "FinalProject (S5_frame_writeback):             release %06llu on CPU=%d @ sec=%lf\n", S5Cnt, sched_getcpu(), current_realtime - start_realtime);
     }
 
     pthread_exit((void*)0);
@@ -1401,9 +1391,9 @@ void* S5_frame_writeback(void* threadp)
  * Insert my code above
  *************************************************************************/
 
-int main(int argc, char **argv)
+int main(int argc, char** argv)
 {
-    if(argc > 1)
+    if (argc > 1)
         dev_name = argv[1];
     else
         dev_name = "/dev/video0";
@@ -1414,54 +1404,54 @@ int main(int argc, char **argv)
         int c;
 
         c = getopt_long(argc, argv,
-                    short_options, long_options, &idx);
+            short_options, long_options, &idx);
 
         if (-1 == c)
             break;
 
         switch (c)
         {
-            case 0: /* getopt_long() flag */
-                break;
+        case 0: /* getopt_long() flag */
+            break;
 
-            case 'd':
-                dev_name = optarg;
-                break;
+        case 'd':
+            dev_name = optarg;
+            break;
 
-            case 'h':
-                usage(stdout, argc, argv);
-                exit(EXIT_SUCCESS);
+        case 'h':
+            usage(stdout, argc, argv);
+            exit(EXIT_SUCCESS);
 
-            case 'm':
-                io = IO_METHOD_MMAP;
-                break;
+        case 'm':
+            io = IO_METHOD_MMAP;
+            break;
 
-            case 'r':
-                io = IO_METHOD_READ;
-                break;
+        case 'r':
+            io = IO_METHOD_READ;
+            break;
 
-            case 'u':
-                io = IO_METHOD_USERPTR;
-                break;
+        case 'u':
+            io = IO_METHOD_USERPTR;
+            break;
 
-            case 'o':
-                out_buf++;
-                break;
+        case 'o':
+            out_buf++;
+            break;
 
-            case 'f':
-                force_format++;
-                break;
+        case 'f':
+            force_format++;
+            break;
 
-            case 'c':
-                errno = 0;
-                frame_count = strtol(optarg, NULL, 0);
-                if (errno)
-                        errno_exit(optarg);
-                break;
+        case 'c':
+            errno = 0;
+            frame_count = strtol(optarg, NULL, 0);
+            if (errno)
+                errno_exit(optarg);
+            break;
 
-            default:
-                usage(stderr, argc, argv);
-                exit(EXIT_FAILURE);
+        default:
+            usage(stderr, argc, argv);
+            exit(EXIT_FAILURE);
         }
     }
 
@@ -1478,30 +1468,40 @@ int main(int argc, char **argv)
     cpu_set_t threadcpu;
     double current_time;
     int cpuidx;
+    int flags = 0;
     int i;
     int rc;
     int rt_max_prio;
     int rt_min_prio;
-    struct timespec rt_res;
+    struct timespec current_time_val;
+    struct timespec current_time_res;
+    double current_realtime;
+    double current_realtime_res;
 
-    start_time = getTimeMsec();
+    clock_gettime(MY_CLOCK, &start_time_val);
+    start_realtime = realtime(&start_time_val);
+    clock_gettime(MY_CLOCK, &current_time_val);
+    current_realtime = realtime(&current_time_val);
 
     ///< Delay for 1 sec before starting
     usleep(1000000);
 
     printf("Starting Synchronome Project...\n");
+    printf("Main");
     get_cpu_core_config();
 
     ///< Initialize clock resolution
-    clock_getres(MY_CLOCK, &rt_res);
-    printf("RT clock resolution is %ld sec, %ld nsec\n", rt_res.tv_sec, rt_res.tv_nsec);
+    clock_getres(MY_CLOCK, &current_time_res);
+    current_realtime_res = realtime(&current_time_res);
+    printf("Starting S0 Sequencer @ sec=%6.9lf with resolution at %6.9lf sec\n", (current_realtime - start_realtime), current_realtime_res);
 
     printf("System has %d processors configured and %d available.\n", get_nprocs_conf(), get_nprocs());
 
     ///< Clear the CPU set then add all CPUs to entire CPU set
     CPU_ZERO(&allcpuset);
-    for (i = 0; i < NUM_OF_CPU_CORES; i++)
+    for (i = 0; i < NUM_OF_CPU_CORES; i++) {
         CPU_SET(i, &allcpuset);
+    }
 
     printf("Using CPUs=%d from total available.\n", CPU_COUNT(&allcpuset));
 
@@ -1526,6 +1526,19 @@ int main(int argc, char **argv)
         cpuidx = (RT_CORE);
         CPU_SET(cpuidx, &threadcpu);
 
+        ///< Initialize semaphore for this thread i
+        rc = sem_init(&sem[i], 0, 0);
+        if (rc > EXIT_SUCCESS) {
+            printf("Failed to initialize sem[%d]\n", i);
+            exit(EXIT_FAILURE_N);
+        }
+        else {
+            printf("sem[%d] initialized\n", i);
+        }
+
+        ///< Initialize abort signal for this thread i
+        abort_threads[i] = FALSE;
+
         ///< Initialize the scheduling attributes for this thread i
         rc = pthread_attr_init(&rt_sched_attr[i]);
         if (rc < EXIT_SUCCESS) {
@@ -1533,7 +1546,7 @@ int main(int argc, char **argv)
             exit(EXIT_FAILURE);
         }
         else {
-            printf("Initialized rt_sched_attr[%d]\n", i);
+            printf("rt_sched_attr[%d] initialized\n", i);
         }
 
         ///< Set scheduling policies for this thread i
@@ -1543,7 +1556,7 @@ int main(int argc, char **argv)
             exit(EXIT_FAILURE);
         }
         else {
-            printf("Set inherit sched for rt_sched_attr[%d] to PTHREAD_EXPLICIT_SCHED\n", i);
+            printf("rt_sched_attr[%d] inherit sched set to PTHREAD_EXPLICIT_SCHED\n", i);
         }
         rc = pthread_attr_setschedpolicy(&rt_sched_attr[i], SCHED_FIFO);
         if (rc < EXIT_SUCCESS) {
@@ -1551,17 +1564,17 @@ int main(int argc, char **argv)
             exit(EXIT_FAILURE);
         }
         else {
-            printf("Set scheduling policy for rt_sched_attr[%d] to SCHED_FIFO\n", i);
+            printf("rt_sched_attr[%d] scheduling policy set to SCHED_FIFO\n", i);
         }
 
         ///< Set core affinity for this thread i
         rc = pthread_attr_setaffinity_np(&rt_sched_attr[i], sizeof(cpu_set_t), &threadcpu);
         if (rc < EXIT_SUCCESS) {
-            printf("Failed to set core affinity for rt_sched_attr[%d] to Core %d\n", i, cpuidx);
+            printf("Failed to set core affinity for rt_sched_attr[%d] to %d\n", i, cpuidx);
             exit(EXIT_FAILURE);
         }
         else {
-            printf("Set core affinity for rt_sched_attr[%d] to Core %d\n", i, cpuidx);
+            printf("rt_sched_attr[%d] core affinity set to %d\n", i, cpuidx);
         }
 
         ///< Set scheduling priority for this thread i (higher priority services for lower values of i
@@ -1572,12 +1585,7 @@ int main(int argc, char **argv)
             exit(EXIT_FAILURE);
         }
         else {
-            printf("Set scheduling priority for rt_sched_attr[%d] to %d/%d\n", i, rt_param[i].sched_priority, rt_max_prio);
-        }
-
-        ///< Pass number of S0_PERIODS to S0 Sequencer so we know how long to run
-        if (i == 0) {
-            threadParams[i].sequencePeriods = S0_PERIODS;
+            printf("rt_sched_attr[%d] scheduling priority set to %d/%d\n", i, rt_param[i].sched_priority, rt_max_prio);
         }
 
         ///< Store thread IDs of each service based on values of i
@@ -1585,78 +1593,106 @@ int main(int argc, char **argv)
     }
 
     printf("Service threads will run on %d CPU cores\n", CPU_COUNT(&threadcpu));
-    current_time = getTimeMsec();
-    syslog(LOG_CRIT, "FinalProject (MAIN): on CPU=%d @ sec=%lf, elapsed=%lf\n", sched_getcpu(), start_time, current_time);
+    clock_gettime(MY_CLOCK, &current_time_val);
+    current_realtime = realtime(&current_time_val);
+    syslog(LOG_CRIT, "FinalProject (MAIN):                           on CPU=%d @ sec=%lf\n", sched_getcpu(), current_realtime - start_realtime);
 
-    ///< create frame acquisition thread but perform no action because semaphore is not given
-    rc = pthread_create(&threads[1],                    // pointer to thread descriptor
-                        &rt_sched_attr[1],              // use specific attributes
+    ///< Create S1 Frame Acquisition thread but perform no action because semaphore is not given
+    rc = pthread_create(&threads[S1],                    // pointer to thread descriptor
+                        &rt_sched_attr[S1],              // use specific attributes
                         S1_frame_acquisition,           // thread function entry point
-                        (void*)&(threadParams[1])       // parameters to pass in
+                        (void*)&(threadParams[S1])       // parameters to pass in
     );
     if (rc < EXIT_SUCCESS) {
-        printf("Failed to create thread[1]\n");
+        printf("Failed to create thread[%d] tied to S1 Frame Acquisition\n", S1);
         exit(EXIT_FAILURE);
     }
+    else {
+        printf("Created thread[%d] tied to S1 Frame Acquisition\n", S1);
+    }
 
-    ///< create frame difference threshold thread but perform no action because semaphore is not given
-    rc = pthread_create(&threads[2],                    // pointer to thread descriptor
-                        &rt_sched_attr[2],              // use specific attributes
+    ///< Create S2 Frame Difference Threshold thread but perform no action because semaphore is not given
+    rc = pthread_create(&threads[S2],                    // pointer to thread descriptor
+                        &rt_sched_attr[S2],              // use specific attributes
                         S2_frame_difference_threshold,  // thread function entry point
-                        (void*)&(threadParams[2])       // parameters to pass in
+                        (void*)&(threadParams[S2])       // parameters to pass in
     );
     if (rc < EXIT_SUCCESS) {
-        printf("Failed to create thread[2]\n");
+        printf("Failed to create thread[%d] tied to S2 Frame Difference Threshold\n", S2);
         exit(EXIT_FAILURE);
     }
+    else {
+        printf("Created thread[%d] tied to S2 Frame Difference Threshold\n", S2);
+    }
 
-    ///< create frame select thread but perform no action because semaphore is not given
-    rc = pthread_create(&threads[3],                    // pointer to thread descriptor
-                        &rt_sched_attr[3],              // use specific attributes
+    ///< Create S3 Frame Select thread but perform no action because semaphore is not given
+    rc = pthread_create(&threads[S3],                    // pointer to thread descriptor
+                        &rt_sched_attr[S3],              // use specific attributes
                         S3_frame_select,                // thread function entry point
-                        (void*)&(threadParams[3])       // parameters to pass in
+                        (void*)&(threadParams[S3])       // parameters to pass in
     );
     if (rc < EXIT_SUCCESS) {
-        printf("Failed to create thread[3]\n");
+        printf("Failed to create thread[%d] tied to S3 Frame Select\n", S3);
         exit(EXIT_FAILURE);
     }
+    else {
+        printf("Created thread[%d] tied to S3 Frame Select\n", S3);
+    }
 
-    ///< create frame process thread but perform no action because semaphore is not given
-    rc = pthread_create(&threads[4],                    // pointer to thread descriptor
-                        &rt_sched_attr[4],              // use specific attributes
+    ///< Create S4 Frame Process thread but perform no action because semaphore is not given
+    rc = pthread_create(&threads[S4],                    // pointer to thread descriptor
+                        &rt_sched_attr[S4],              // use specific attributes
                         S4_frame_process,               // thread function entry point
-                        (void*)&(threadParams[4])       // parameters to pass in
+                        (void*)&(threadParams[S4])       // parameters to pass in
     );
     if (rc < EXIT_SUCCESS) {
-        printf("Failed to create thread[4]\n");
+        printf("Failed to create thread[%d] tied to S4 Frame Process\n", S4);
         exit(EXIT_FAILURE);
+    }
+    else {
+        printf("Created thread[%d] tied to S4 Frame Process\n", S4);
     }
 
     ///< create frame write-back thread but perform no action because semaphore is not given
-    rc = pthread_create(&threads[5],                    // pointer to thread descriptor
-                        &rt_sched_attr[5],              // use specific attributes
+    rc = pthread_create(&threads[S5],                    // pointer to thread descriptor
+                        &rt_sched_attr[S5],              // use specific attributes
                         S5_frame_writeback,             // thread function entry point
-                        (void*)&(threadParams[5])       // parameters to pass in
+                        (void*)&(threadParams[S5])       // parameters to pass in
     );
     if (rc < EXIT_SUCCESS) {
-        printf("Failed to create thread[5]\n");
+        printf("Failed to create thread[%d] tied to S5 Frame Write-Back\n", S5);
         exit(EXIT_FAILURE);
+    }
+    else {
+        printf("Created thread[%d] tied to S5 Frame Write-Back\n", S5);
     }
 
-    ///< create sequencer thread last because now all other S1-S5 are created and ready to fire off
-    rc = pthread_create(&threads[0],                    // pointer to thread descriptor
-        &rt_sched_attr[0],              // use specific attributes
-        S0_sequencer,                   // thread function entry point
-        (void*)&(threadParams[0])       // parameters to pass in
-    );
-    if (rc < EXIT_SUCCESS) {
-        printf("Failed to create thread[0]\n");
-        exit(EXIT_FAILURE);
-    }
+    ///< Create Sequencer thread, which like a cyclic executive, is highest priority
+    printf("Starting S0 Sequencer...\n");
+    sequencePeriods = S0_PERIODS;
+
+    ///< Set up to signal SIGALRM if timer expires
+    timer_create(MY_CLOCK, NULL, &timer_1);
+    signal(SIGALRM, (void(*)()) S0_sequencer);
+
+    ///< Arm the interval timer
+    itime.it_interval.tv_sec = 0;
+    itime.it_interval.tv_nsec = (1.0/S0_FREQ)*(NANOSEC_PER_SEC);
+    itime.it_value.tv_sec = 0;
+    itime.it_value.tv_nsec = (1.0/S0_FREQ)*(NANOSEC_PER_SEC);
+
+    timer_settime(timer_1, flags, &itime, &last_itime);
 
     ///< Join back all threads
     for (i = 0; i < NUM_OF_THREADS; i++) {
-        pthread_join(threads[i], NULL);
+        rc = pthread_join(threads[i], NULL);
+        
+        if (rc < EXIT_SUCCESS) {
+            perror("main pthread_join");
+        }
+        else {
+            printf("Joined thread[%d]\n", i);
+        }
     }
 
     // service loop frame read
@@ -1666,14 +1702,16 @@ int main(int argc, char **argv)
      * Insert my code above
      *************************************************************************/
 
-    // shutdown of frame acquisition service
+     // shutdown of frame acquisition service
     stop_capturing();
     uninit_device();
     close_device();
 
-    fprintf(stderr, "\n");
+    //fprintf(stderr, "\n");
 
-    printf("Ending Synchronome Project... writing syslog trace to ./syslog_trace_%02dmin.txt\n\n", S0_RUN_TIME_MIN);
+    //printf("Ending Synchronome Project... writing syslog trace to ./syslog_trace_%02dmin.txt\n\n", S0_RUN_TIME_MIN);
+    printf("Ending Synchronome Project... review syslog trace\n\n", S0_RUN_TIME_MIN);
+
 
     ///< Calculate number of lines to tail from syslog in relation to S0_RUN_TIME_MIN
     //sprintf(sys_buffer, "tail -%d /var/log/syslog | grep -n FinalProject > ./syslog_trace_%02dmin.txt", (int)((115.0/96.0)*S0_PERIODS + 13), S0_RUN_TIME_MIN);
