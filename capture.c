@@ -69,7 +69,7 @@
 #define FALSE (0)
 #define EXIT_SUCCESS (0)
 #define EXIT_FAILURE (1)
-#define EXIT_FAILURE2 (-1)
+#define EXIT_FAILURE_N (-1)
 
 ///< Conversion values
 #define NANOSEC_PER_SEC (1000000000)
@@ -123,6 +123,13 @@
 ///< Example (2) - If 120 Hz is desired for the Sequencer, then (10^9 ns)/(1 s * 120 Hz) = (10^9)/(120 Hz) = 8333333
 ///<               Thus, for 120 Hz this would be set to 8333333
 #define RTSEQ_DELAY_NSEC (NANOSEC_PER_SEC/S0_FREQ)
+
+///< Number of frames expected at the end of the test
+///< Example (1) - Running for 1800 sec for 1 Hz synchronome will be (S0_RUN_TIME_SEC)*(S3_FREQ) + Initial Frames = (1800 sec)*(1 Hz) + 9 Initial Frames = 1809 frames
+///<               Thus, for 1800 sec at 1 Hz selection this would be set to 1809
+///< Example (2) - Running for 180 sec for 10 Hz synchronome will be (S0_RUN_TIME_SEC)*(S3_FREQ) + Initial Frames = (180 sec)*(10 Hz) + 9 Initial Frames = 1809 frames
+///<               Thus, for 180 sec at 10 Hz selection this would be set to 1809
+#define FRAME_COUNT ((S0_RUN_TIME_SEC)*(S3_FREQ) + 9)
 
 ///< Size of buffer to hold tail syslog trace command at the end
 ///< Example (1) - tail -216000 /var/log/syslog | grep -n FinalProject > ./syslog_trace_30min.txt
@@ -204,7 +211,7 @@ struct buffer          *buffers;
 static unsigned int     n_buffers;
 static int              out_buf;
 static int              force_format=1;
-static int              frame_count = (189);
+static int              frame_count = (FRAME_COUNT);
 
 static void errno_exit(const char* s)
 {
@@ -1254,7 +1261,7 @@ void* S0_sequencer(void* threadp)
             else if (rc < EXIT_SUCCESS)
             {
                 perror("FinalProject (S0_sequencer): nanosleep");
-                exit(EXIT_FAILURE2);
+                exit(EXIT_FAILURE_N);
             }
 
             //syslog(LOG_CRIT, "FinalProject (S0_sequencer): WOKE UP\n");
@@ -1305,6 +1312,9 @@ void* S1_frame_acquisition(void* threadp)
     {
         sem_wait(&semS1);
         S1Cnt++;
+
+        ///< Begin frame acquisition
+        mainloop();
 
         current_time = getTimeMsec();
         syslog(LOG_CRIT, "FinalProject (S1_frame_acquisition):           release %06llu on CPU=%d @ sec=%lf\n", S1Cnt, sched_getcpu(), current_time);
@@ -1504,6 +1514,52 @@ int main(int argc, char **argv)
         CPU_SET(i, &allcpuset);
 
     printf("Using CPUs=%d from total available.\n", CPU_COUNT(&allcpuset));
+
+    ///< Initialize semaphores for S1-S5
+    rc = sem_init(&semS1, 0, 0);
+    if (rc > EXIT_SUCCESS){
+        printf("Failed to initialize S1 Frame Acquisition semaphore\n");
+        exit(EXIT_FAILURE_N);
+    }
+    else {
+        printf("Initialized S1 Frame Acquisition semaphore\n");
+    }
+
+    rc = sem_init(&semS2, 0, 0);
+    if (rc > EXIT_SUCCESS) {
+        printf("Failed to initialize S2 Frame Difference Threshold semaphore\n");
+        exit(EXIT_FAILURE_N);
+    }
+    else {
+        printf("Initialized S2 Frame Difference Threshold semaphore\n");
+    }
+
+    rc = sem_init(&semS3, 0, 0);
+    if (rc > EXIT_SUCCESS) {
+        printf("Failed to initialize S3 Frame Selection semaphore\n");
+        exit(EXIT_FAILURE_N);
+    }
+    else {
+        printf("Initialized S3 Frame Selection semaphore\n");
+    }
+
+    rc = sem_init(&semS4, 0, 0);
+    if (rc > EXIT_SUCCESS) {
+        printf("Failed to initialize S4 Frame Process semaphore\n");
+        exit(EXIT_FAILURE_N);
+    }
+    else {
+        printf("Initialized S4 Frame Process semaphore\n");
+    }
+
+    rc = sem_init(&semS5, 0, 0);
+    if (rc > EXIT_SUCCESS) {
+        printf("Failed to initialize S5 Frame Write-Back semaphore\n");
+        exit(EXIT_FAILURE_N);
+    }
+    else {
+        printf("Initialized S5 Frame Write-Back semaphore\n");
+    }
 
     ///< Grab and store min and max priorities from SCHED_FIFO scheduler
     rt_max_prio = sched_get_priority_max(SCHED_FIFO);
