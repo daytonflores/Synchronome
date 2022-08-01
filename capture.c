@@ -112,7 +112,7 @@
 #define PHOTO_RES (1280*960)
 
 ///< How many frames should the buffer S1 Frame Acquisition writes to store
-#define BUF_SIZE_FRAME_READ (60)
+#define BIGBUFFER_READ_MAX_NUM_OF_FRAMES_STORED (60)
 
 ///< Number of frames expected at the end of the test
 ///< Example (1) - Running for 1800 sec for 1 Hz synchronome will be (S0_RUN_TIME_SEC)*(S3_FREQ) + Initial Frames = (1800 sec)*(1 Hz) + 9 Initial Frames = 1809 frames
@@ -176,11 +176,11 @@ static struct itimerspec last_itime;
 unsigned long long sequencePeriods;
 
 ///< Buffer info for S1 Frame Acquisition
-unsigned char bigbuffer_read[PHOTO_RES];
+unsigned char bigbuffer_read[PHOTO_RES*BIGBUFFER_READ_MAX_NUM_OF_FRAMES_STORED];
 static int bigbuffer_read_i = 0;
-void* p_buf[BUF_SIZE_FRAME_READ];
+void* p_buf[BIGBUFFER_READ_MAX_NUM_OF_FRAMES_STORED];
 static int p_buf_i = 0;
-int size_buf[BUF_SIZE_FRAME_READ];
+int size_buf[BIGBUFFER_READ_MAX_NUM_OF_FRAMES_STORED];
 static int size_buf_i = 0;
 
 ///< Counter for amount of frames read by S1 Frame Acquisition. Always ignore the first 8 frames
@@ -315,13 +315,15 @@ static void dump_pgm(const void* p, int size, unsigned int tag, struct timespec*
 
 static void store_buf_read(const void* p, int size, unsigned int tag, struct timespec* time)
 {
-    if (framecnt >= 0) {
+    if (framecnt_read >= 0) {
         int i;
         unsigned char* pptr = (unsigned char*)p;
 
         for (i = 0; i < size; i = i + 1) {
-            bigbuffer_read[i] = pptr[i];
+            bigbuffer_read[(PHOTO_RES*bigbuffer_read_i) + i] = pptr[i];
         }
+
+        bigbuffer_read_i++;
     }
 }
 
@@ -547,9 +549,10 @@ static int read_frame(void)
         //process_image(buffers[buf.index].start, buf.bytesused);
         struct timespec frame_time;
         clock_gettime(MY_CLOCK, &frame_time);
-        framecnt++;
-        store_buf_read(buffers[buf.index].start, buf.bytesused, framecnt, &frame_time);
-        size_buf[0] = buf.bytesused;
+        size_buf[size_buf_i] = buf.bytesused;
+        framecnt_read++;
+        size_buf_i++;
+        store_buf_read(buffers[buf.index].start, buf.bytesused, framecnt_read, &frame_time);
 
         if (-1 == xioctl(fd, VIDIOC_QBUF, &buf))
             errno_exit("VIDIOC_QBUF");
@@ -1701,8 +1704,8 @@ int main(int argc, char** argv)
     for (i = 0, newi = 0; i < size_buf[0]; i = i + 4, newi = newi + 2)
     {
         // Y1=first byte and Y2=third byte
-        bigbuffer[newi] = pptr[i];
-        bigbuffer[newi + 1] = pptr[i + 2];
+        bigbuffer[newi] = pptr[(0*PHOTO_RES) + i];
+        bigbuffer[newi + 1] = pptr[(0*PHOTO_RES) + i + 2];
     }
     
     if (framecnt > -1)
@@ -1712,6 +1715,25 @@ int main(int argc, char** argv)
     
         //printf("Dump YUYV converted to YY size %d\n", size);
         syslog(LOG_INFO, "FinalProject (S4_frame_process):               Dump YUYV (%d) converted to YY (%d)\n", size_buf[0], size_buf[0]/2);
+    }
+
+    clock_gettime(MY_CLOCK, &frame_time);
+    framecnt++;
+    
+    for (i = 0, newi = 0; i < size_buf[1]; i = i + 4, newi = newi + 2)
+    {
+        // Y1=first byte and Y2=third byte
+        bigbuffer[newi] = pptr[(1*PHOTO_RES) + i];
+        bigbuffer[newi + 1] = pptr[(1*PHOTO_RES) + i + 2];
+    }
+    
+    if (framecnt > -1)
+    {
+        dump_pgm(bigbuffer, (size_buf[1] / 2), framecnt, &frame_time);
+        //dump_pgm(bigbuffer, (size / 2), framecnt, &frame_time);
+    
+        //printf("Dump YUYV converted to YY size %d\n", size);
+        syslog(LOG_INFO, "FinalProject (S4_frame_process):               Dump YUYV (%d) converted to YY (%d)\n", size_buf[1], size_buf[1] / 2);
     }
 
     fflush(stderr);
