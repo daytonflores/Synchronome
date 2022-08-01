@@ -75,6 +75,7 @@
 ///< Conversion values
 #define NANOSEC_PER_SEC (1000000000)
 #define NANOSEC_PER_MICROSEC (1000)
+#define MICROSEC_PER_SEC (1000000)
 #define MILLISEC_PER_SEC (1000)
 #define SEC_PER_MIN (60)
 
@@ -106,6 +107,12 @@
 
 ///< How many periods S0 Sequencer should run for
 #define S0_PERIODS (S0_FREQ*S0_RUN_TIME_SEC)
+
+///< Resolution of pictures captured by S1 Frame Acquisition
+#define PHOTO_RES (1280*960)
+
+///< How many frames should the buffer S1 Frame Acquisition writes to store
+#define BUF_SIZE_FRAME_READ (60)
 
 ///< Number of frames expected at the end of the test
 ///< Example (1) - Running for 1800 sec for 1 Hz synchronome will be (S0_RUN_TIME_SEC)*(S3_FREQ) + Initial Frames = (1800 sec)*(1 Hz) + 9 Initial Frames = 1809 frames
@@ -168,6 +175,23 @@ static struct itimerspec last_itime;
 ///< Store S0_PERIODS into unsigned long long
 unsigned long long sequencePeriods;
 
+///< Buffer info for S1 Frame Acquisition
+unsigned char bigbuffer_read[PHOTO_RES];
+static int bigbuffer_read_i = 0;
+void* p_buf[BUF_SIZE_FRAME_READ];
+static int p_buf_i = 0;
+int size_buf[BUF_SIZE_FRAME_READ];
+static int size_buf_i = 0;
+
+///< Counter for amount of frames read by S1 Frame Acquisition. Always ignore the first 8 frames
+int framecnt_read = -8;
+
+///< Counter for amount of frames read by S4 Frame Process
+int framecnt_process = 0;
+
+///< 1 photo buffer
+//struct v4l2_buffer buf_read;
+
 /*************************************************************************
 * Insert my code above
 *************************************************************************/
@@ -198,6 +222,11 @@ static unsigned int     n_buffers;
 static int              out_buf;
 static int              force_format = 1;
 static int              frame_count = (FRAME_COUNT);
+
+// always ignore first 8 frames
+int framecnt = -8;
+
+unsigned char bigbuffer[PHOTO_RES];
 
 static void errno_exit(const char* s)
 {
@@ -245,7 +274,7 @@ static void dump_ppm(const void* p, int size, unsigned int tag, struct timespec*
     } while (total < size);
 
     //printf("wrote %d bytes\n", total);
-    syslog(LOG_INFO, "wrote %d bytes\n", total);
+    syslog(LOG_INFO, "FinalProject (S5_frame_writeback): wrote %d bytes\n", total);
 
     close(dumpfd);
 
@@ -278,12 +307,23 @@ static void dump_pgm(const void* p, int size, unsigned int tag, struct timespec*
     } while (total < size);
 
     //printf("wrote %d bytes\n", total);
-    syslog(LOG_INFO, "wrote %d bytes\n", total);
+    syslog(LOG_INFO, "FinalProject (S5_frame_writeback):             wrote %d bytes\n", total);
 
     close(dumpfd);
 
 }
 
+static void store_buf_read(const void* p, int size, unsigned int tag, struct timespec* time)
+{
+    if (framecnt >= 0) {
+        int i;
+        unsigned char* pptr = (unsigned char*)p;
+
+        for (i = 0; i < size; i = i + 1) {
+            bigbuffer_read[i] = pptr[i];
+        }
+    }
+}
 
 void yuv2rgb_float(float y, float u, float v,
     unsigned char* r, unsigned char* g, unsigned char* b)
@@ -345,12 +385,6 @@ void yuv2rgb(int y, int u, int v, unsigned char* r, unsigned char* g, unsigned c
     *b = b1;
 }
 
-
-// always ignore first 8 frames
-int framecnt = -8;
-
-unsigned char bigbuffer[(1280 * 960)];
-
 static void process_image(const void* p, int size)
 {
     int i, newi, newsize = 0;
@@ -362,9 +396,10 @@ static void process_image(const void* p, int size)
     clock_gettime(CLOCK_REALTIME, &frame_time);
 
     framecnt++;
+    framecnt_process++;
 
     //printf("frame %d: ", framecnt);
-    syslog(LOG_INFO, "frame %d: ", framecnt);
+    syslog(LOG_INFO, "FinalProject (S4_frame_process):               frame %d: , frame_process %d:", framecnt, framecnt_process);
 
     // This just dumps the frame to a file now, but you could replace with whatever image
     // processing you wish.
@@ -373,9 +408,10 @@ static void process_image(const void* p, int size)
     if (fmt.fmt.pix.pixelformat == V4L2_PIX_FMT_GREY)
     {
         //printf("Dump graymap as-is size %d\n", size);
-        syslog(LOG_INFO, "Dump graymap as-is size %d\n", size);
+        syslog(LOG_INFO, "FinalProject (S4_frame_process):               Dump graymap as-is size %d\n", size);
 
         dump_pgm(p, size, framecnt, &frame_time);
+        //dump_pgm(p, size, framecnt_process, &frame_time);
     }
 
     else if (fmt.fmt.pix.pixelformat == V4L2_PIX_FMT_YUYV)
@@ -396,9 +432,10 @@ static void process_image(const void* p, int size)
         if (framecnt > -1)
         {
             dump_ppm(bigbuffer, ((size * 6) / 4), framecnt, &frame_time);
+            //dump_ppm(bigbuffer, ((size * 6) / 4), framecnt_process, &frame_time);
 
             //printf("Dump YUYV converted to RGB size %d\n", size);
-            syslog(LOG_INFO, "Dump YUYV converted to RGB size %d\n", size);
+            syslog(LOG_INFO, "FinalProject (S4_frame_process):               Dump YUYV converted to RGB size %d\n", size);
 
         }
 #else
@@ -416,9 +453,10 @@ static void process_image(const void* p, int size)
         if (framecnt > -1)
         {
             dump_pgm(bigbuffer, (size / 2), framecnt, &frame_time);
+            //dump_pgm(bigbuffer, (size / 2), framecnt_process, &frame_time);
 
             //printf("Dump YUYV converted to YY size %d\n", size);
-            syslog(LOG_INFO, "Dump YUYV converted to YY size %d\n", size);
+            syslog(LOG_INFO, "FinalProject (S4_frame_process):               Dump YUYV converted to YY size %d\n", size);
         }
 #endif
 
@@ -427,14 +465,15 @@ static void process_image(const void* p, int size)
     else if (fmt.fmt.pix.pixelformat == V4L2_PIX_FMT_RGB24)
     {
         //printf("Dump RGB as-is size %d\n", size);
-        syslog(LOG_INFO, "Dump RGB as-is size %d\n", size);
+        syslog(LOG_INFO, "FinalProject (S4_frame_process):               Dump RGB as-is size %d\n", size);
 
         dump_ppm(p, size, framecnt, &frame_time);
+        //dump_ppm(p, size, framecnt_process, &frame_time);
     }
     else
     {
         //printf("ERROR - unknown dump format\n");
-        syslog(LOG_ERR, "ERROR - unknown dump format\n");
+        syslog(LOG_ERR, "FinalProject (S4_frame_process):               ERROR - unknown dump format\n");
     }
 
     fflush(stderr);
@@ -505,7 +544,12 @@ static int read_frame(void)
 
         assert(buf.index < n_buffers);
 
-        process_image(buffers[buf.index].start, buf.bytesused);
+        //process_image(buffers[buf.index].start, buf.bytesused);
+        struct timespec frame_time;
+        clock_gettime(MY_CLOCK, &frame_time);
+        framecnt++;
+        store_buf_read(buffers[buf.index].start, buf.bytesused, framecnt, &frame_time);
+        size_buf[0] = buf.bytesused;
 
         if (-1 == xioctl(fd, VIDIOC_QBUF, &buf))
             errno_exit("VIDIOC_QBUF");
@@ -566,9 +610,10 @@ static void mainloop(void)
     // 1 sec for 1 fps
     //
     read_delay.tv_sec = 1;
-    read_delay.tv_nsec = 0;
+    read_delay.tv_nsec = (1.0/S1_FREQ)*(NANOSEC_PER_SEC);
 
-    count = frame_count;
+    //count = frame_count;
+    count = 1;
 
     while (count > 0)
     {
@@ -597,22 +642,18 @@ static void mainloop(void)
             if (0 == r)
             {
                 //fprintf(stderr, "select timeout\n");
-                syslog(LOG_ERR, "select timeout\n");
+                syslog(LOG_ERR, "FinalProject (S1_frame_acquisition):           select timeout\n");
 
                 exit(EXIT_FAILURE);
             }
 
             if (read_frame())
             {
-                if (nanosleep(&read_delay, &time_error) != 0) {
-                    //perror("nanosleep");
-                    syslog(LOG_ERR, "nanosleep");
+                if (nanosleep(&read_delay, &time_error) != EXIT_FAILURE_N) {
+                    syslog(LOG_ERR, "FinalProject (S1_frame_acquisition):           nanosleep");
                 }
-
-
                 else {
-                    //printf("time_error.tv_sec=%ld, time_error.tv_nsec=%ld\n", time_error.tv_sec, time_error.tv_nsec);
-                    syslog(LOG_INFO, "time_error.tv_sec=%ld, time_error.tv_nsec=%ld\n", time_error.tv_sec, time_error.tv_nsec);
+                    syslog(LOG_INFO, "FinalProject (S1_frame_acquisition):           time_error.tv_sec=%ld, time_error.tv_nsec=%ld\n", time_error.tv_sec, time_error.tv_nsec);
                 }
 
                 count--;
@@ -1331,6 +1372,8 @@ void* S5_frame_writeback(void* threadp)
         sem_wait(&sem[S5]);
         S5Cnt++;
 
+        //dump_ppm(p, size, framecnt, &frame_time);
+
         clock_gettime(MY_CLOCK, &current_time_val);
         current_realtime = realtime(&current_time_val);
 
@@ -1648,6 +1691,36 @@ int main(int argc, char** argv)
         }
     }
 
+    struct timespec frame_time;
+    int newi;
+    framecnt = 0;
+    unsigned char* pptr = bigbuffer_read;
+
+    clock_gettime(MY_CLOCK, &frame_time);
+
+    for (i = 0, newi = 0; i < size_buf[0]; i = i + 4, newi = newi + 2)
+    {
+        // Y1=first byte and Y2=third byte
+        bigbuffer[newi] = pptr[i];
+        bigbuffer[newi + 1] = pptr[i + 2];
+    }
+    
+    if (framecnt > -1)
+    {
+        dump_pgm(bigbuffer, (size_buf[0] / 2), framecnt, &frame_time);
+        //dump_pgm(bigbuffer, (size / 2), framecnt, &frame_time);
+    
+        //printf("Dump YUYV converted to YY size %d\n", size);
+        syslog(LOG_INFO, "FinalProject (S4_frame_process):               Dump YUYV (%d) converted to YY (%d)\n", size_buf[0], size_buf[0]/2);
+    }
+
+    fflush(stderr);
+
+    //fprintf(stderr, ".");
+    //syslog(LOG_ERR, ".");
+
+    fflush(stdout);
+
     // service loop frame read
     // mainloop();
 
@@ -1671,7 +1744,7 @@ int main(int argc, char** argv)
     //sprintf(sys_buffer, "tail -%d /var/log/syslog | grep -n FinalProject > ./syslog_trace_%02dmin.txt", 75000, S0_RUN_TIME_MIN);
 
     ///< Delay for 1 sec before checking syslog trace
-    usleep(1000000);
+    //usleep(1000000);
 
     //system(sys_buffer);
 
