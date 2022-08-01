@@ -111,8 +111,8 @@
 ///< Resolution of pictures captured by S1 Frame Acquisition
 #define PHOTO_RES (1280*960)
 
-///< How many frames should the buffer S1 Frame Acquisition writes to store
-#define BIGBUFFER_READ_MAX_NUM_OF_FRAMES_STORED (60)
+///< Store 60 seconds of data at 20 Hz
+#define BIGBUFFER_READ_MAX_NUM_OF_FRAMES_STORED (S0_RUN_TIME_SEC*S1_FREQ)
 
 ///< Number of frames expected at the end of the test
 ///< Example (1) - Running for 1800 sec for 1 Hz synchronome will be (S0_RUN_TIME_SEC)*(S3_FREQ) + Initial Frames = (1800 sec)*(1 Hz) + 9 Initial Frames = 1809 frames
@@ -274,7 +274,7 @@ static void dump_ppm(const void* p, int size, unsigned int tag, struct timespec*
     } while (total < size);
 
     //printf("wrote %d bytes\n", total);
-    syslog(LOG_INFO, "FinalProject (S5_frame_writeback): wrote %d bytes\n", total);
+    syslog(LOG_INFO, "FinalProject (S5_frame_writeback):             Wrote %04d %d bytes\n", tag, total);
 
     close(dumpfd);
 
@@ -307,7 +307,7 @@ static void dump_pgm(const void* p, int size, unsigned int tag, struct timespec*
     } while (total < size);
 
     //printf("wrote %d bytes\n", total);
-    syslog(LOG_INFO, "FinalProject (S5_frame_writeback):             wrote %d bytes\n", total);
+    syslog(LOG_INFO, "FinalProject (S5_frame_writeback):             Wrote %04d %d bytes\n", tag, total);
 
     close(dumpfd);
 
@@ -630,8 +630,8 @@ static void mainloop(void)
             FD_SET(fd, &fds);
 
             /* Timeout. */
-            tv.tv_sec = 2;
-            tv.tv_usec = 0;
+            tv.tv_sec = 0;
+            tv.tv_usec = (1.0/S1_FREQ)*(MICROSEC_PER_SEC);
 
             r = select(fd + 1, &fds, NULL, NULL, &tv);
 
@@ -652,12 +652,12 @@ static void mainloop(void)
 
             if (read_frame())
             {
-                if (nanosleep(&read_delay, &time_error) != EXIT_FAILURE_N) {
-                    syslog(LOG_ERR, "FinalProject (S1_frame_acquisition):           nanosleep");
-                }
-                else {
-                    syslog(LOG_INFO, "FinalProject (S1_frame_acquisition):           time_error.tv_sec=%ld, time_error.tv_nsec=%ld\n", time_error.tv_sec, time_error.tv_nsec);
-                }
+                //if (nanosleep(&read_delay, &time_error) != EXIT_FAILURE_N) {
+                //    syslog(LOG_INFO, "FinalProject (S1_frame_acquisition):           NanosleepSuccess: for %ld ns", read_delay.tv_nsec);
+                //}
+                //else {
+                //    syslog(LOG_INFO, "FinalProject (S1_frame_acquisition):           NanosleepFail:    time_error.tv_sec=%ld, time_error.tv_nsec=%ld\n", time_error.tv_sec, time_error.tv_nsec);
+                //}
 
                 count--;
                 break;
@@ -1695,45 +1695,28 @@ int main(int argc, char** argv)
     }
 
     struct timespec frame_time;
-    int newi;
+    int j, newi;
     framecnt = 0;
     unsigned char* pptr = bigbuffer_read;
+    printf("bigbuffer_read_i = %d\n", bigbuffer_read_i);
 
-    clock_gettime(MY_CLOCK, &frame_time);
+    for (j = 0; j < bigbuffer_read_i; j++) {
+        for (i = 0, newi = 0; i < size_buf[j]; i = i + 4, newi = newi + 2)
+        {
+            // Y1=first byte and Y2=third byte
+            bigbuffer[newi] = pptr[(j * PHOTO_RES) + i];
+            bigbuffer[newi + 1] = pptr[(j * PHOTO_RES) + i + 2];
+        }
 
-    for (i = 0, newi = 0; i < size_buf[0]; i = i + 4, newi = newi + 2)
-    {
-        // Y1=first byte and Y2=third byte
-        bigbuffer[newi] = pptr[(0*PHOTO_RES) + i];
-        bigbuffer[newi + 1] = pptr[(0*PHOTO_RES) + i + 2];
-    }
-    
-    if (framecnt > -1)
-    {
-        dump_pgm(bigbuffer, (size_buf[0] / 2), framecnt, &frame_time);
-        //dump_pgm(bigbuffer, (size / 2), framecnt, &frame_time);
-    
-        //printf("Dump YUYV converted to YY size %d\n", size);
-        syslog(LOG_INFO, "FinalProject (S4_frame_process):               Dump YUYV (%d) converted to YY (%d)\n", size_buf[0], size_buf[0]/2);
-    }
+        if (framecnt > -1)
+        {
+            clock_gettime(MY_CLOCK, &frame_time);
+            dump_pgm(bigbuffer, (size_buf[j] / 2), j, &frame_time);
+            //dump_pgm(bigbuffer, (size / 2), framecnt, &frame_time);
 
-    clock_gettime(MY_CLOCK, &frame_time);
-    framecnt++;
-    
-    for (i = 0, newi = 0; i < size_buf[1]; i = i + 4, newi = newi + 2)
-    {
-        // Y1=first byte and Y2=third byte
-        bigbuffer[newi] = pptr[(1*PHOTO_RES) + i];
-        bigbuffer[newi + 1] = pptr[(1*PHOTO_RES) + i + 2];
-    }
-    
-    if (framecnt > -1)
-    {
-        dump_pgm(bigbuffer, (size_buf[1] / 2), framecnt, &frame_time);
-        //dump_pgm(bigbuffer, (size / 2), framecnt, &frame_time);
-    
-        //printf("Dump YUYV converted to YY size %d\n", size);
-        syslog(LOG_INFO, "FinalProject (S4_frame_process):               Dump YUYV (%d) converted to YY (%d)\n", size_buf[1], size_buf[1] / 2);
+            //printf("Dump YUYV converted to YY size %d\n", size);
+            syslog(LOG_INFO, "FinalProject (S4_frame_process):               Dump %j YUYV (%d) converted to YY (%d)\n", size_buf[j], size_buf[j] / 2);
+        }
     }
 
     fflush(stderr);
