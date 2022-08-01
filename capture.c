@@ -320,10 +320,10 @@ static void store_buf_read(const void* p, int size, unsigned int tag, struct tim
         unsigned char* pptr = (unsigned char*)p;
 
         for (i = 0; i < size; i = i + 1) {
-            bigbuffer_read[(PHOTO_RES*bigbuffer_read_i) + i] = pptr[i];
+            bigbuffer_read[(PHOTO_RES*framecnt_read) + i] = pptr[i];
         }
 
-        bigbuffer_read_i++;
+        //bigbuffer_read_i++;
     }
 }
 
@@ -547,12 +547,22 @@ static int read_frame(void)
         assert(buf.index < n_buffers);
 
         //process_image(buffers[buf.index].start, buf.bytesused);
+
+        ///< Declare and grab the time frame has been read
         struct timespec frame_time;
         clock_gettime(MY_CLOCK, &frame_time);
-        size_buf[size_buf_i] = buf.bytesused;
-        framecnt_read++;
-        size_buf_i++;
+
+        ///< Store the size of frame (in bytes) into global buffer
+        size_buf[framecnt_read] = buf.bytesused;
+
+        ///< Now store the frame into global buffer
         store_buf_read(buffers[buf.index].start, buf.bytesused, framecnt_read, &frame_time);
+
+        ///< We have stored another frame
+        framecnt_read++;
+
+        ///< We have stored another frame's size
+        size_buf_i++;
 
         if (-1 == xioctl(fd, VIDIOC_QBUF, &buf))
             errno_exit("VIDIOC_QBUF");
@@ -604,7 +614,7 @@ static int read_frame(void)
 static void mainloop(void)
 {
     unsigned int count;
-    struct timespec read_delay;
+    //struct timespec read_delay;
     struct timespec time_error;
 
     // Replace this with a sequencer DELAY
@@ -612,9 +622,10 @@ static void mainloop(void)
     // 250 million nsec is a 250 msec delay, for 4 fps
     // 1 sec for 1 fps
     //
-    read_delay.tv_sec = 1;
-    read_delay.tv_nsec = (1.0/S1_FREQ)*(NANOSEC_PER_SEC);
+    //read_delay.tv_sec = 1;
+    //read_delay.tv_nsec = (1.0/S1_FREQ)*(NANOSEC_PER_SEC);
 
+    ///< S1 Frame Acquisition will invoke mainloop() at S1_FREQ Hz. Upon each invocation, we should only read 1 frame
     //count = frame_count;
     count = 1;
 
@@ -629,7 +640,7 @@ static void mainloop(void)
             FD_ZERO(&fds);
             FD_SET(fd, &fds);
 
-            /* Timeout. */
+            ///< Don't let select block for more than S1 Frame Acquisition's period
             tv.tv_sec = 0;
             tv.tv_usec = (1.0/S1_FREQ)*(MICROSEC_PER_SEC);
 
@@ -650,15 +661,9 @@ static void mainloop(void)
                 exit(EXIT_FAILURE);
             }
 
+            ///< If we have successfully read a frame, exit the loop
             if (read_frame())
             {
-                //if (nanosleep(&read_delay, &time_error) != EXIT_FAILURE_N) {
-                //    syslog(LOG_INFO, "FinalProject (S1_frame_acquisition):           NanosleepSuccess: for %ld ns", read_delay.tv_nsec);
-                //}
-                //else {
-                //    syslog(LOG_INFO, "FinalProject (S1_frame_acquisition):           NanosleepFail:    time_error.tv_sec=%ld, time_error.tv_nsec=%ld\n", time_error.tv_sec, time_error.tv_nsec);
-                //}
-
                 count--;
                 break;
             }
@@ -1264,7 +1269,7 @@ void* S1_frame_acquisition(void* threadp)
         sem_wait(&sem[S1]);
         S1Cnt++;
 
-        ///< Begin frame acquisition
+        ///< Call mainloop() at S1_FREQ Hz to read exactly 1 frame from camera into bigbuffer_read[]
         mainloop();
 
         clock_gettime(MY_CLOCK, &current_time_val);
@@ -1696,11 +1701,10 @@ int main(int argc, char** argv)
 
     struct timespec frame_time;
     int j, newi;
-    framecnt = 0;
     unsigned char* pptr = bigbuffer_read;
-    printf("bigbuffer_read_i = %d\n", bigbuffer_read_i);
+    printf("framecnt_read = %d\n", framecnt_read);
 
-    for (j = 0; j < bigbuffer_read_i; j++) {
+    for (j = 0; j < framecnt_read; j++) {
         for (i = 0, newi = 0; i < size_buf[j]; i = i + 4, newi = newi + 2)
         {
             // Y1=first byte and Y2=third byte
@@ -1708,14 +1712,14 @@ int main(int argc, char** argv)
             bigbuffer[newi + 1] = pptr[(j * PHOTO_RES) + i + 2];
         }
 
-        if (framecnt > -1)
+        if (framecnt_read > -1)
         {
             clock_gettime(MY_CLOCK, &frame_time);
             dump_pgm(bigbuffer, (size_buf[j] / 2), j, &frame_time);
             //dump_pgm(bigbuffer, (size / 2), framecnt, &frame_time);
 
             //printf("Dump YUYV converted to YY size %d\n", size);
-            syslog(LOG_INFO, "FinalProject (S4_frame_process):               Dump %j YUYV (%d) converted to YY (%d)\n", size_buf[j], size_buf[j] / 2);
+            syslog(LOG_INFO, "FinalProject (S4_frame_process):               Dump %j YUYV (%d) converted to YY (%d)\n", size_buf[j], size_buf[j]/2);
         }
     }
 
