@@ -117,6 +117,8 @@
 ///< Same size as bigbuffer_read
 #define BIGBUFFER_DIFF_THRESHOLD_MAX_NUM_OF_FRAMES_STORED (BIGBUFFER_READ_MAX_NUM_OF_FRAMES_STORED)
 
+#define DIFF_THRESHOLD 30
+
 ///< Store 60 seconds of data at 1 Hz + 1 extra frame
 //#define BIGBUFFER_SELECT_MAX_NUM_OF_FRAMES_STORED (S0_RUN_TIME_SEC*S3_FREQ) + 1
 #define BIGBUFFER_SELECT_MAX_NUM_OF_FRAMES_STORED (S0_RUN_TIME_SEC*S2_FREQ) + 1
@@ -580,6 +582,7 @@ static void process_image(const void* p, int size)
 
 static void mark_frames(void) {
     int i;
+    unsigned char* bigbuffer_read_ptr = bigbuffer_read;
 
     ///< Get current range of frames we need to mark
     framecnt_diff_threshold_first = framecnt_diff_threshold_last;
@@ -594,10 +597,23 @@ static void mark_frames(void) {
         else {
             bigbuffer_diff_threshold[i] = blurry;
         }
-
+    
         ///< We have stored another frame_quality
         framecnt_diff_threshold++;
     }
+
+    ///< Check if current frame is in motion
+    //for (i = framecnt_diff_threshold_first; i < framecnt_diff_threshold_last; i++) {
+    //    if ((unsigned int)bigbuffer_read_ptr[i] - (unsigned int)bigbuffer_read_ptr[i + 1] < DIFF_THRESHOLD) {
+    //        bigbuffer_diff_threshold[i] = stable;
+    //    }
+    //    else {
+    //        bigbuffer_diff_threshold[i] = blurry;
+    //    }
+    //
+    //    ///< We have stored another frame_quality
+    //    framecnt_diff_threshold++;
+    //}
 }
 
 static void select_frames(void) {
@@ -630,7 +646,7 @@ static void select_frames(void) {
     ///< For testing, store all stable frames into bigbuffer_select
     for (i = framecnt_select_first; i < framecnt_select_last; i++) {
         //syslog(LOG_INFO, "FinalProject (S3_frame_select):                SELECT_FRAMES bigbuffer_diff_threshold[%d]=%d", i, bigbuffer_diff_threshold[i]);
-        if (bigbuffer_diff_threshold[i] == stable) {
+        if (bigbuffer_diff_threshold[i] == stable && bigbuffer_diff_threshold[i + 1] == blurry) {
             ///< Select this stable frame's index in bigbuffer_read for the call to store_buf_select
             frame_selected_from_bigbuffer_read = i;
             //syslog(LOG_INFO, "FinalProject (S3_frame_select):                SELECT_FRAMES found stable at bigbuffer_diff_threshold[%d]", i);
