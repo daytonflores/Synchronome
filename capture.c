@@ -230,6 +230,14 @@ int frame_selected_from_bigbuffer_select = 0;
 unsigned char bigbuffer_process[PHOTO_RES*BIGBUFFER_PROCESS_MAX_NUM_OF_FRAMES_STORED];
 int size_buf_process[BIGBUFFER_PROCESS_MAX_NUM_OF_FRAMES_STORED];
 
+///< Counter for amount of frames read by S5 Frame Writeback
+int framecnt_writeback = 0;
+int framecnt_writeback_first = 0;
+int framecnt_writeback_last = 0;
+
+///< Frame number selected from bigbuffer_read by S5 Frame Writeback
+int frame_selected_from_bigbuffer_process = 0;
+
 /*************************************************************************
 * Insert my code above
 *************************************************************************/
@@ -325,6 +333,7 @@ char pgm_dumpname[] = "frames/test0000.pgm";
 static void dump_pgm(const void* p, int size, unsigned int tag, struct timespec* time)
 {
     int written, i, total, dumpfd;
+    unsigned char* pptr = (unsigned char*)p;
 
     snprintf(&pgm_dumpname[11], 9, "%04d", tag);
     strncat(&pgm_dumpname[15], ".pgm", 5);
@@ -340,7 +349,8 @@ static void dump_pgm(const void* p, int size, unsigned int tag, struct timespec*
 
     do
     {
-        written = write(dumpfd, p, size);
+        //written = write(dumpfd, p, size);
+        written = write(dumpfd, (const void*)(pptr[size*framecnt_writeback]), size);
         total += written;
     } while (total < size);
 
@@ -639,6 +649,7 @@ static void select_frames(void) {
         }
     }
 }
+
 static void process_frames(void) {
     int i;
     struct timespec frame_time;
@@ -670,6 +681,30 @@ static void process_frames(void) {
 
         ///< We have stored another processed frame
         framecnt_process++;
+    }
+}
+
+static void writeback_frames(void) {
+    int i;
+    struct timespec frame_time;
+
+    ///< Get current range of frames we need to select from
+    framecnt_writeback_first = framecnt_writeback_last;
+    framecnt_writeback_last = framecnt_process;
+
+    ///< Writeback frames
+    for (i = framecnt_writeback_first; i < framecnt_writeback_last; i++) {
+        syslog(LOG_INFO, "FinalProject (S5_frame_writeback):             WRITEBACK_FRAMES i=%d, framecnt_process=%d, framecnt_writeback_first=%d, framecnt_writeback_last=%d", i, framecnt_process, framecnt_writeback_first, framecnt_writeback_last);
+        
+        ///< Select this frame's index in bigbuffer_process for the call to dump it into FLASH
+        frame_selected_from_bigbuffer_process = i;
+
+        clock_gettime(MY_CLOCK, &frame_time);
+
+        ///< Writeback the current image
+        dump_pgm(bigbuffer_process, size_buf_process[i], i, &frame_time);
+
+        framecnt_writeback++;
     }
 }
 
@@ -1452,7 +1487,7 @@ void* S1_frame_acquisition(void* threadp)
         sem_wait(&sem[S1]);
         S1Cnt++;
 
-        ///< Call mainloop() at S1_FREQ Hz to read exactly 1 frame from camera into bigbuffer_read[]
+        ///< Read 1 frame from camera into bigbuffer_read every 1/S1_FREQ = 1/20 = 0.05 sec
         mainloop();
 
         clock_gettime(MY_CLOCK, &current_time_val);
@@ -1482,7 +1517,7 @@ void* S2_frame_difference_threshold(void* threadp)
         sem_wait(&sem[S2]);
         S2Cnt++;
 
-        ///< Out of 1/S2_FREQ sec, mark which frames are blurry and which are stable
+        ///< Mark 10 frames as stable or blurry in bigbuffer_read (based on matrix subtraction between frames) every 1/S2_FREQ = 1/2 = 0.50 sec
         mark_frames();
 
         clock_gettime(MY_CLOCK, &current_time_val);
@@ -1512,7 +1547,7 @@ void* S3_frame_select(void* threadp)
         sem_wait(&sem[S3]);
         S3Cnt++;
 
-        ///< Select a frame every 1 sec based on its markings from S2 Frame Difference Threshold
+        ///< Select 1 frame from bigbuffer_read into bigbuffer_select (based on its markings from S2 Frame Difference Threshold) every 1/S3_FREQ = 1/1 = 1.00 sec
         select_frames();
 
         clock_gettime(MY_CLOCK, &current_time_val);
@@ -1542,7 +1577,7 @@ void* S4_frame_process(void* threadp)
         sem_wait(&sem[S4]);
         S4Cnt++;
 
-        ///< Process 2 frames every 1 sec from S3 Frame Difference Threshold
+        ///< Process 4 frames from bigbuffer_select into bigbuffer_process every 1/S4_FREQ = 1/0.5 = 2.00 sec
         process_frames();
 
         clock_gettime(MY_CLOCK, &current_time_val);
@@ -1572,7 +1607,8 @@ void* S5_frame_writeback(void* threadp)
         sem_wait(&sem[S5]);
         S5Cnt++;
 
-        //dump_ppm(p, size, framecnt, &frame_time);
+        ///< Write back 8 frames from bigbuffer_process into FLASH every 1/S5_FREQ = 1/0.25 = 4.00 sec
+        writeback_frames();
 
         clock_gettime(MY_CLOCK, &current_time_val);
         current_realtime = realtime(&current_time_val);
@@ -1995,25 +2031,25 @@ int main(int argc, char** argv)
     //fflush(stdout);
 
     ///< Test loop for S4_frame_process
-    pptr = bigbuffer_process;
-    for (j = 0; j < framecnt_process; j++) {
-        syslog(LOG_INFO, "FinalProject (S4_frame_process):               MAIN size_buf_process[%d] = %d", j, size_buf_process[j]);
-
-        for (i = 0; i < size_buf_process[j]; i = i + 1)
-        {
-            bigbuffer[i] = pptr[(j*size_buf_process[j]) + i];
-        }
-        
-        if (framecnt_process > -1)
-        {
-            clock_gettime(MY_CLOCK, &frame_time);
-            dump_pgm(bigbuffer, (size_buf_process[j]), j, &frame_time);
-            //dump_pgm(bigbuffer, (size / 2), framecnt, &frame_time);
-        
-            //printf("Dump YUYV converted to YY size %d\n", size);
-            syslog(LOG_INFO, "FinalProject (S4_frame_process):               MAIN Select dump %d YUYV (%d) converted to YY (%d)", j, size_buf_process[j]*2, size_buf_process[j]);
-        }
-    }
+    //pptr = bigbuffer_process;
+    //for (j = 0; j < framecnt_process; j++) {
+    //    syslog(LOG_INFO, "FinalProject (S4_frame_process):               MAIN size_buf_process[%d] = %d", j, size_buf_process[j]);
+    //
+    //    for (i = 0; i < size_buf_process[j]; i = i + 1)
+    //    {
+    //        bigbuffer[i] = pptr[(j*size_buf_process[j]) + i];
+    //    }
+    //    
+    //    if (framecnt_process > -1)
+    //    {
+    //        clock_gettime(MY_CLOCK, &frame_time);
+    //        dump_pgm(bigbuffer, (size_buf_process[j]), j, &frame_time);
+    //        //dump_pgm(bigbuffer, (size / 2), framecnt, &frame_time);
+    //    
+    //        //printf("Dump YUYV converted to YY size %d\n", size);
+    //        syslog(LOG_INFO, "FinalProject (S4_frame_process):               MAIN Select dump %d YUYV (%d) converted to YY (%d)", j, size_buf_process[j]*2, size_buf_process[j]);
+    //    }
+    //}
 
     // service loop frame read
     // mainloop();
