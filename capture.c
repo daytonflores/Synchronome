@@ -350,7 +350,7 @@ static void dump_pgm(const void* p, int size, unsigned int tag, struct timespec*
     do
     {
         //written = write(dumpfd, p, size);
-        written = write(dumpfd, (const void*)(pptr[size*framecnt_writeback]), size);
+        written = write(dumpfd, (const void*)(&(pptr[size*framecnt_writeback])), size);
         total += written;
     } while (total < size);
 
@@ -1942,9 +1942,7 @@ int main(int argc, char** argv)
     printf("framecnt_diff_threshold = %d\n", framecnt_diff_threshold);
     printf("framecnt_select = %d\n", framecnt_select);
     printf("framecnt_process = %d\n", framecnt_process);
-    printf("\n");
-
-    printf("\n");
+    printf("framecnt_writeback = %d\n", framecnt_writeback);
 
     ///< Test loop for S1_frame_acquisition
     //pptr = bigbuffer_read;
@@ -1999,7 +1997,7 @@ int main(int argc, char** argv)
     printf("num_untouched = %d\n", num_untouched);
     printf("num_stable = %d\n", num_stable);
     printf("num_blurry = %d\n", num_blurry);
-    printf("\n");
+
 
     ///< Test loop for S3_frame_select
     //pptr = bigbuffer_select;
@@ -2066,6 +2064,7 @@ int main(int argc, char** argv)
     //fprintf(stderr, "\n");
 
     //printf("Ending Synchronome Project... writing syslog trace to ./syslog_trace_%02dmin.txt\n\n", S0_RUN_TIME_MIN);
+    printf("\n");
     printf("Ending Synchronome Project... review syslog trace\n\n", S0_RUN_TIME_MIN);
 
 
