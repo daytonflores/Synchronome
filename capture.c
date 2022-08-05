@@ -581,7 +581,9 @@ static void process_image(const void* p, int size)
 }
 
 static void mark_frames(void) {
+    int diff;
     int i;
+    int j;
     unsigned char* bigbuffer_read_ptr = bigbuffer_read;
 
     ///< Get current range of frames we need to mark
@@ -604,7 +606,11 @@ static void mark_frames(void) {
 
     ///< Check if current frame is in motion
     //for (i = framecnt_diff_threshold_first; i < framecnt_diff_threshold_last; i++) {
-    //    if ((unsigned int)bigbuffer_read_ptr[i] - (unsigned int)bigbuffer_read_ptr[i + 1] < DIFF_THRESHOLD) {
+    //    diff = 0;
+    //    for(j = 0; j < PHOTO_RES; j++){
+    //        diff += abs((unsigned int)bigbuffer_read_ptr[i*PHOTO_RES + j] - (unsigned int)bigbuffer_read_ptr[i + 1]*PHOTO_RES + j)
+    //    }
+    //    if (diff < DIFF_THRESHOLD) {
     //        bigbuffer_diff_threshold[i] = stable;
     //    }
     //    else {
@@ -662,6 +668,8 @@ static void select_frames(void) {
     
             ///< We have stored another selected frame
             framecnt_select++;
+
+            break;
         }
     }
 }
@@ -2001,11 +2009,11 @@ int main(int argc, char** argv)
                 //printf("bigbuffer_read[%d] = blurry\n", i);
                 break;
         }
-        diff = (unsigned int)pptr[i * PHOTO_RES] - (unsigned int)pptr[(i + 1) * PHOTO_RES];
-        //diff = 0;
-        //for (j = 0; j < PHOTO_RES; j++) {
-        //    diff += (unsigned int)pptr[i*PHOTO_RES + j] - (unsigned int)pptr[(i + 1)*PHOTO_RES + j];
-        //}
+        //diff = (unsigned int)pptr[i * PHOTO_RES] - (unsigned int)pptr[(i + 1) * PHOTO_RES];
+        diff = 0;
+        for (j = 0; j < PHOTO_RES; j++) {
+            diff += abs((unsigned int)pptr[i*PHOTO_RES + j] - (unsigned int)pptr[(i + 1)*PHOTO_RES + j]);
+        }
         syslog(LOG_INFO, "FinalProject (S2_frame_difference_threshold):  MAIN bigbuffer_read[%d] - bigbuffer_read[%d + 1] = %u", i, i, diff);
         syslog(LOG_INFO, "FinalProject (S2_frame_difference_threshold):  MAIN size_buf[%d] = %d", i, size_buf[i]);
     }
