@@ -1,0 +1,1 @@
+clear; tail -99999 /var/log/syslog | grep -n -e "S3_frame_select"
