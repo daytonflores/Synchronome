@@ -40,6 +40,7 @@
 #include <sched.h>
 #include <semaphore.h>
 #include <signal.h>
+#include <stdbool.h>
 #include <syslog.h>
 #include <sys/sysinfo.h>
 
@@ -95,7 +96,7 @@
 
 ///< Desired frequencies in Hz for all S0-S5
 #define S0_FREQ (120)
-#define S1_FREQ (20)
+#define S1_FREQ (10)
 #define S2_FREQ (2)
 #define S3_FREQ (1)
 #define S4_FREQ (0.5)
@@ -111,24 +112,28 @@
 ///< Resolution of pictures captured by S1 Frame Acquisition
 #define PHOTO_RES (1280*960)
 
+///< How many beginning frames to ignore
+#define BEGINNING_FRAMES_IGNORED 4
+
 ///< Store 60 seconds of data at 20 Hz
-//#define BIGBUFFER_READ_MAX_NUM_OF_FRAMES_STORED (S0_RUN_TIME_SEC*S1_FREQ)
+#define BIGBUFFER_READ_MAX_NUM_OF_FRAMES_STORED (S0_RUN_TIME_SEC*S1_FREQ)
+//#define BIGBUFFER_READ_MAX_NUM_OF_FRAMES_STORED 60
 
 ///< Store double the lowest frequency worth of data * frequency of S1 Frame Acquisition
 ///< Example (1) - Per Rate Monotonic Analysis, lowest frequency is S5 Frame Writeback so (2*(1/S5_FREQ)*S1_FREQ) = (2*(1/0.25 Hz)*20 Hz) = 160
 ///<               Thus, this should be set to store 160 frames
-#define BIGBUFFER_READ_MAX_NUM_OF_FRAMES_STORED (unsigned int)(2*(1/S5_FREQ)*S1_FREQ)
+//#define BIGBUFFER_READ_MAX_NUM_OF_FRAMES_STORED (unsigned int)(2*(1/S5_FREQ)*S1_FREQ)
 
 ///< Same size as bigbuffer_read
-//#define BIGBUFFER_DIFF_THRESHOLD_MAX_NUM_OF_FRAMES_STORED (BIGBUFFER_READ_MAX_NUM_OF_FRAMES_STORED)
+#define BIGBUFFER_DIFF_THRESHOLD_MAX_NUM_OF_FRAMES_STORED (BIGBUFFER_READ_MAX_NUM_OF_FRAMES_STORED)
 
 ///< Store double the lowest frequency worth of data * frequency of S1 Frame Acquisition
 ///< Example (1) - Per Rate Monotonic Analysis, lowest frequency is S5 Frame Writeback so (2*(1/S5_FREQ)*S1_FREQ) = (2*(1/0.25 Hz)*20 Hz) = 160
 ///<               Thus, this should be set to store 160 frame qualities
-#define BIGBUFFER_DIFF_THRESHOLD_MAX_NUM_OF_FRAMES_STORED (BIGBUFFER_READ_MAX_NUM_OF_FRAMES_STORED)
+//#define BIGBUFFER_DIFF_THRESHOLD_MAX_NUM_OF_FRAMES_STORED (BIGBUFFER_READ_MAX_NUM_OF_FRAMES_STORED)
 
 ///< Thresholds externally determined by outputting differences between consecutive frames
-#define DIFF_THRESHOLD 280000
+#define DIFF_THRESHOLD 180000
 
 ///< Store 60 seconds of data at 1 Hz + 1 extra frame
 //#define BIGBUFFER_SELECT_MAX_NUM_OF_FRAMES_STORED (S0_RUN_TIME_SEC*S3_FREQ) + 1
@@ -206,13 +211,15 @@ double current_realtime_last_seq = 0;
 ///< Buffer info for S1 Frame Acquisition
 unsigned char bigbuffer_read[PHOTO_RES*BIGBUFFER_READ_MAX_NUM_OF_FRAMES_STORED];
 int size_buf_read[BIGBUFFER_READ_MAX_NUM_OF_FRAMES_STORED];
+int buf_i_read = 0;
 
-///< Counter for amount of frames read by S1 Frame Acquisition. Always ignore the first 8 frames
-int framecnt_read = -8;
+///< Counter for amount of frames read by S1 Frame Acquisition. Always ignore the first X frames
+int framecnt_read = -(BEGINNING_FRAMES_IGNORED);
 
 ///< Buffer info for S2 Frame Difference Threshold
-enum frame_quality {untouched, next_frame_is_diff, next_frame_is_same};
+enum frame_quality {untouched, good, bad};
 enum frame_quality bigbuffer_diff_threshold[BIGBUFFER_DIFF_THRESHOLD_MAX_NUM_OF_FRAMES_STORED];
+int buf_i_diff_threshold = 0;
 
 ///< Counter for amount of frames marked by S2 Frame Difference Threshold
 int framecnt_diff_threshold = 0;
@@ -222,9 +229,12 @@ int framecnt_next_untouched = 0;
 int framecnt_next_diff = 0;
 int framecnt_next_same = 0;
 
+int first_diff_threshold = -1;
+
 ///< Buffer info for S3 Frame Select
 unsigned char bigbuffer_select[PHOTO_RES*BIGBUFFER_SELECT_MAX_NUM_OF_FRAMES_STORED];
 int size_buf_select[BIGBUFFER_SELECT_MAX_NUM_OF_FRAMES_STORED];
+int buf_i_select = 0;
 
 ///< Counter for amount of frames selected by S3 Frame Select
 int framecnt_select = 0;
@@ -245,6 +255,7 @@ int frame_selected_from_bigbuffer_select = 0;
 ///< Buffer info for S4 Frame Process
 unsigned char bigbuffer_process[PHOTO_RES*BIGBUFFER_PROCESS_MAX_NUM_OF_FRAMES_STORED];
 int size_buf_process[BIGBUFFER_PROCESS_MAX_NUM_OF_FRAMES_STORED];
+int buf_i_process = 0;
 
 ///< Counter for amount of frames read by S5 Frame Writeback
 int framecnt_writeback = 0;
@@ -384,7 +395,7 @@ static void store_buf_read(const void* p, int size, unsigned int tag, struct tim
         unsigned char* pptr = (unsigned char*)p;
 
         for (i = 0; i < size; i = i + 1) {
-            bigbuffer_read[(PHOTO_RES*(framecnt_read % BIGBUFFER_READ_MAX_NUM_OF_FRAMES_STORED)) + i] = pptr[i];
+            bigbuffer_read[(PHOTO_RES*(framecnt_read)) + i] = pptr[i];
         }
     }
 }
@@ -599,10 +610,12 @@ static void mark_frames(void) {
     int i;
     int j;
     unsigned char* bigbuffer_read_ptr = bigbuffer_read;
+    int stable_frame_1;
+    int stable_frame_2;
 
     ///< Get current range of frames we need to mark
     framecnt_diff_threshold_first = framecnt_diff_threshold_last;
-    framecnt_diff_threshold_last = framecnt_read % BIGBUFFER_READ_MAX_NUM_OF_FRAMES_STORED;
+    framecnt_diff_threshold_last = framecnt_read;
 
     syslog(LOG_INFO, "FinalProject (S2_frame_difference_threshold):  MARK_FRAMES framecnt_diff_threshold_first=%d, framecnt_diff_threshold_last=%d", framecnt_diff_threshold_first, framecnt_diff_threshold_last);
 
@@ -631,66 +644,9 @@ static void mark_frames(void) {
     //    ///< We have stored another frame_quality
     //    framecnt_diff_threshold++;
     //}
-
-    if (framecnt_diff_threshold_first > framecnt_diff_threshold_last) {
-        ///< Check if current frame is different from next frame
-        for (i = framecnt_diff_threshold_first; i < BIGBUFFER_READ_MAX_NUM_OF_FRAMES_STORED; i++) {
-
-            ///< Calculate sum of difference between each byte of current frame and next frame
-            diff = 0;
-            for (j = 0; j < PHOTO_RES; j++) {
-                diff += abs((unsigned int)bigbuffer_read_ptr[i * PHOTO_RES + j] - (unsigned int)bigbuffer_read_ptr[(i + 1) * PHOTO_RES + j]);
-            }
-
-            syslog(LOG_INFO, "FinalProject (S2_frame_difference_threshold):  MARK_FRAMES framecnt_diff_threshold=%d", framecnt_diff_threshold);
-            syslog(LOG_INFO, "FinalProject (S2_frame_difference_threshold):  MARK_FRAMES size_buf_read[%d]=%d", i, size_buf_read[i]);
-            syslog(LOG_INFO, "FinalProject (S2_frame_difference_threshold):  MARK_FRAMES bigbuffer_read[%d] - bigbuffer_read[%d + 1]=%u", i, i, diff);
-
-            ///< If the next frame is significantly different from the current frame then mark as such
-            if (diff > DIFF_THRESHOLD) {
-                bigbuffer_diff_threshold[i] = next_frame_is_diff;
-                framecnt_next_diff++;
-                framecnt_next_untouched--;
-            }
-            else {
-                bigbuffer_diff_threshold[i] = next_frame_is_same;
-                framecnt_next_same++;
-                framecnt_next_untouched--;
-            }
-
-            ///< We have performed another frame difference calculation
-            framecnt_diff_threshold++;
-        }
-
-        for (i = 0; i < framecnt_diff_threshold_last; i++) {
-
-            ///< Calculate sum of difference between each byte of current frame and next frame
-            diff = 0;
-            for (j = 0; j < PHOTO_RES; j++) {
-                diff += abs((unsigned int)bigbuffer_read_ptr[i * PHOTO_RES + j] - (unsigned int)bigbuffer_read_ptr[(i + 1) * PHOTO_RES + j]);
-            }
-
-            syslog(LOG_INFO, "FinalProject (S2_frame_difference_threshold):  MARK_FRAMES framecnt_diff_threshold=%d", framecnt_diff_threshold);
-            syslog(LOG_INFO, "FinalProject (S2_frame_difference_threshold):  MARK_FRAMES size_buf_read[%d]=%d", i, size_buf_read[i]);
-            syslog(LOG_INFO, "FinalProject (S2_frame_difference_threshold):  MARK_FRAMES bigbuffer_read[%d] - bigbuffer_read[%d + 1]=%u", i, i, diff);
-
-            ///< If the next frame is significantly different from the current frame then mark as such
-            if (diff > DIFF_THRESHOLD) {
-                bigbuffer_diff_threshold[i] = next_frame_is_diff;
-                framecnt_next_diff++;
-                framecnt_next_untouched--;
-            }
-            else {
-                bigbuffer_diff_threshold[i] = next_frame_is_same;
-                framecnt_next_same++;
-                framecnt_next_untouched--;
-            }
-
-            ///< We have performed another frame difference calculation
-            framecnt_diff_threshold++;
-        }
-    }
-    else {
+    
+    syslog(LOG_INFO, "FinalProject (S2_frame_difference_threshold):  MARK_FRAMES first_diff_threshold=%d", first_diff_threshold);
+    if (first_diff_threshold < 0) {
         ///< Check if current frame is different from next frame
         for (i = framecnt_diff_threshold_first; i < framecnt_diff_threshold_last; i++) {
 
@@ -704,15 +660,11 @@ static void mark_frames(void) {
             syslog(LOG_INFO, "FinalProject (S2_frame_difference_threshold):  MARK_FRAMES size_buf_read[%d]=%d", i, size_buf_read[i]);
             syslog(LOG_INFO, "FinalProject (S2_frame_difference_threshold):  MARK_FRAMES bigbuffer_read[%d] - bigbuffer_read[%d + 1]=%u", i, i, diff);
 
-            ///< If the next frame is significantly different from the current frame then mark as such
+            ///< If the next frame is significantly different from the current frame then mark 2 frames before as a good frame
             if (diff > DIFF_THRESHOLD) {
-                bigbuffer_diff_threshold[i] = next_frame_is_diff;
+                first_diff_threshold = i;
+                bigbuffer_diff_threshold[first_diff_threshold + 2] = good;
                 framecnt_next_diff++;
-                framecnt_next_untouched--;
-            }
-            else {
-                bigbuffer_diff_threshold[i] = next_frame_is_same;
-                framecnt_next_same++;
                 framecnt_next_untouched--;
             }
 
@@ -720,6 +672,107 @@ static void mark_frames(void) {
             framecnt_diff_threshold++;
         }
     }
+    else {
+        syslog(LOG_INFO, "FinalProject (S2_frame_difference_threshold):  MARK_FRAMES framecnt_diff_threshold=%d", framecnt_diff_threshold);
+        syslog(LOG_INFO, "FinalProject (S2_frame_difference_threshold):  MARK_FRAMES size_buf_read[%d]=%d", i, size_buf_read[i]);
+        syslog(LOG_INFO, "FinalProject (S2_frame_difference_threshold):  MARK_FRAMES bigbuffer_read[%d] - bigbuffer_read[%d + 1]=%u", i, i, diff);
+
+        first_diff_threshold = first_diff_threshold + 2*(S1_FREQ/S2_FREQ);
+        bigbuffer_diff_threshold[first_diff_threshold + 2] = good;
+        framecnt_next_diff++;
+        framecnt_next_untouched--;
+
+        ///< We have performed another frame difference calculation
+        framecnt_diff_threshold = framecnt_diff_threshold + (framecnt_diff_threshold_last - framecnt_diff_threshold_first);
+    }
+    //if (framecnt_diff_threshold_first > framecnt_diff_threshold_last) {
+    //    ///< Check if current frame is different from next frame
+    //    for (i = framecnt_diff_threshold_first; i < BIGBUFFER_READ_MAX_NUM_OF_FRAMES_STORED; i++) {
+    //
+    //        ///< Calculate sum of difference between each byte of current frame and next frame
+    //        diff = 0;
+    //        for (j = 0; j < PHOTO_RES; j++) {
+    //            diff += abs((unsigned int)bigbuffer_read_ptr[i * PHOTO_RES + j] - (unsigned int)bigbuffer_read_ptr[(i + 1) * PHOTO_RES + j]);
+    //        }
+    //
+    //        syslog(LOG_INFO, "FinalProject (S2_frame_difference_threshold):  MARK_FRAMES framecnt_diff_threshold=%d", framecnt_diff_threshold);
+    //        syslog(LOG_INFO, "FinalProject (S2_frame_difference_threshold):  MARK_FRAMES size_buf_read[%d]=%d", i, size_buf_read[i]);
+    //        syslog(LOG_INFO, "FinalProject (S2_frame_difference_threshold):  MARK_FRAMES bigbuffer_read[%d] - bigbuffer_read[%d + 1]=%u", i, i, diff);
+    //
+    //        ///< If the next frame is significantly different from the current frame then mark as such
+    //        if (diff > DIFF_THRESHOLD) {
+    //            bigbuffer_diff_threshold[i] = next_frame_is_diff;
+    //            framecnt_next_diff++;
+    //            framecnt_next_untouched--;
+    //        }
+    //        else {
+    //            bigbuffer_diff_threshold[i] = next_frame_is_same;
+    //            framecnt_next_same++;
+    //            framecnt_next_untouched--;
+    //        }
+    //
+    //        ///< We have performed another frame difference calculation
+    //        framecnt_diff_threshold++;
+    //    }
+    //
+    //    for (i = 0; i < framecnt_diff_threshold_last; i++) {
+    //
+    //        ///< Calculate sum of difference between each byte of current frame and next frame
+    //        diff = 0;
+    //        for (j = 0; j < PHOTO_RES; j++) {
+    //            diff += abs((unsigned int)bigbuffer_read_ptr[i * PHOTO_RES + j] - (unsigned int)bigbuffer_read_ptr[(i + 1) * PHOTO_RES + j]);
+    //        }
+    //
+    //        syslog(LOG_INFO, "FinalProject (S2_frame_difference_threshold):  MARK_FRAMES framecnt_diff_threshold=%d", framecnt_diff_threshold);
+    //        syslog(LOG_INFO, "FinalProject (S2_frame_difference_threshold):  MARK_FRAMES size_buf_read[%d]=%d", i, size_buf_read[i]);
+    //        syslog(LOG_INFO, "FinalProject (S2_frame_difference_threshold):  MARK_FRAMES bigbuffer_read[%d] - bigbuffer_read[%d + 1]=%u", i, i, diff);
+    //
+    //        ///< If the next frame is significantly different from the current frame then mark as such
+    //        if (diff > DIFF_THRESHOLD) {
+    //            bigbuffer_diff_threshold[i] = next_frame_is_diff;
+    //            framecnt_next_diff++;
+    //            framecnt_next_untouched--;
+    //        }
+    //        else {
+    //            bigbuffer_diff_threshold[i] = next_frame_is_same;
+    //            framecnt_next_same++;
+    //            framecnt_next_untouched--;
+    //        }
+    //
+    //        ///< We have performed another frame difference calculation
+    //        framecnt_diff_threshold++;
+    //    }
+    //}
+    //else {
+    //    ///< Check if current frame is different from next frame
+    //    for (i = framecnt_diff_threshold_first; i < framecnt_diff_threshold_last; i++) {
+    //
+    //        ///< Calculate sum of difference between each byte of current frame and next frame
+    //        diff = 0;
+    //        for (j = 0; j < PHOTO_RES; j++) {
+    //            diff += abs((unsigned int)bigbuffer_read_ptr[i * PHOTO_RES + j] - (unsigned int)bigbuffer_read_ptr[(i + 1) * PHOTO_RES + j]);
+    //        }
+    //
+    //        syslog(LOG_INFO, "FinalProject (S2_frame_difference_threshold):  MARK_FRAMES framecnt_diff_threshold=%d", framecnt_diff_threshold);
+    //        syslog(LOG_INFO, "FinalProject (S2_frame_difference_threshold):  MARK_FRAMES size_buf_read[%d]=%d", i, size_buf_read[i]);
+    //        syslog(LOG_INFO, "FinalProject (S2_frame_difference_threshold):  MARK_FRAMES bigbuffer_read[%d] - bigbuffer_read[%d + 1]=%u", i, i, diff);
+    //
+    //        ///< If the next frame is significantly different from the current frame then mark as such
+    //        if (diff > DIFF_THRESHOLD) {
+    //            bigbuffer_diff_threshold[i] = next_frame_is_diff;
+    //            framecnt_next_diff++;
+    //            framecnt_next_untouched--;
+    //        }
+    //        else {
+    //            bigbuffer_diff_threshold[i] = next_frame_is_same;
+    //            framecnt_next_same++;
+    //            framecnt_next_untouched--;
+    //        }
+    //
+    //        ///< We have performed another frame difference calculation
+    //        framecnt_diff_threshold++;
+    //    }
+    //}
 }
 
 static void select_frames(void) {
@@ -729,7 +782,7 @@ static void select_frames(void) {
 
     ///< Get current range of frames we need to select from
     framecnt_select_first = framecnt_select_last;
-    framecnt_select_last = framecnt_diff_threshold % BIGBUFFER_DIFF_THRESHOLD_MAX_NUM_OF_FRAMES_STORED;
+    framecnt_select_last = framecnt_diff_threshold;
     syslog(LOG_INFO, "FinalProject (S3_frame_select):                SELECT_FRAMES framecnt_select_first=%d, framecnt_select_last=%d", framecnt_select_first, framecnt_select_last);
 
     ///< For testing, select last frame read by S1_frame_acquisition
@@ -750,124 +803,158 @@ static void select_frames(void) {
     //    framecnt_select++;
     //}
 
-    if (framecnt_select_first > framecnt_select_last) {
-        ///< For testing, store all stable frames into bigbuffer_select
-        for (i = framecnt_select_first; i < BIGBUFFER_DIFF_THRESHOLD_MAX_NUM_OF_FRAMES_STORED; i++) {
-            if (i + 1 < BIGBUFFER_DIFF_THRESHOLD_MAX_NUM_OF_FRAMES_STORED) {
-                i_next = i + 1;
-            }
-            else {
-                i_next = 0;
-            }
-            if (bigbuffer_diff_threshold[i] == next_frame_is_diff && bigbuffer_diff_threshold[i_next] == next_frame_is_same) {
-                ///< Select this stable frame's index in bigbuffer_read for the call to store_buf_select
-                if (i > 0) {
-                    frame_selected_from_bigbuffer_read = (i - 1);
-                }
-                else {
-                    frame_selected_from_bigbuffer_read = (BIGBUFFER_DIFF_THRESHOLD_MAX_NUM_OF_FRAMES_STORED - 1);
-                }
+    ///< For testing, store all good frames into bigbuffer_select
+    for (i = framecnt_select_first; i < framecnt_select_last; i++) {
+        if (bigbuffer_diff_threshold[i] == good) {
+            ///< Select this stable frame's index in bigbuffer_read for the call to store_buf_select
+            frame_selected_from_bigbuffer_read = i;
 
-                clock_gettime(MY_CLOCK, &frame_time);
+            clock_gettime(MY_CLOCK, &frame_time);
 
-                ///< Store the size of selected frame (in bytes) into global select buffer
-                //syslog(LOG_INFO, "FinalProject (S3_frame_select):                SELECT_FRAMES framecnt_select_first=%d, framecnt_select_last=%d, i=%d, size_buf_read[%d]=%d, size_buf_select[%d]=%d", framecnt_select_first, framecnt_select_last, i, i, size_buf_read[i], framecnt_select, size_buf_select[framecnt_select]);
-                size_buf_select[framecnt_select] = size_buf_read[frame_selected_from_bigbuffer_read];
-                //syslog(LOG_INFO, "FinalProject (S3_frame_select):                SELECT_FRAMES framecnt_select_first=%d, framecnt_select_last=%d, i=%d, size_buf_read[%d]=%d, size_buf_select[%d]=%d", framecnt_select_first, framecnt_select_last, i, i, size_buf_read[i], framecnt_select, size_buf_select[framecnt_select]);
+            ///< Store the size of selected frame (in bytes) into global select buffer
+            //syslog(LOG_INFO, "FinalProject (S3_frame_select):                SELECT_FRAMES framecnt_select_first=%d, framecnt_select_last=%d, i=%d, size_buf_read[%d]=%d, size_buf_select[%d]=%d", framecnt_select_first, framecnt_select_last, i, i, size_buf_read[i], framecnt_select, size_buf_select[framecnt_select]);
+            size_buf_select[framecnt_select] = size_buf_read[frame_selected_from_bigbuffer_read];
+            //syslog(LOG_INFO, "FinalProject (S3_frame_select):                SELECT_FRAMES framecnt_select_first=%d, framecnt_select_last=%d, i=%d, size_buf_read[%d]=%d, size_buf_select[%d]=%d", framecnt_select_first, framecnt_select_last, i, i, size_buf_read[i], framecnt_select, size_buf_select[framecnt_select]);
 
-                syslog(LOG_INFO, "FinalProject (S3_frame_select):                SELECT_FRAMES framecnt_select=%d", framecnt_select);
-                syslog(LOG_INFO, "FinalProject (S3_frame_select):                SELECT_FRAMES size_buf_select[%d]=%d", framecnt_select, size_buf_select[framecnt_select]);
-                syslog(LOG_INFO, "FinalProject (S3_frame_select):                SELECT_FRAMES bigbuffer_diff_threshold[%d]=%d", frame_selected_from_bigbuffer_read, bigbuffer_diff_threshold[frame_selected_from_bigbuffer_read]);
-                syslog(LOG_INFO, "FinalProject (S3_frame_select):                SELECT_FRAMES selecting size_buf_read[%d] to store", frame_selected_from_bigbuffer_read);
+            syslog(LOG_INFO, "FinalProject (S3_frame_select):                SELECT_FRAMES framecnt_select=%d", framecnt_select);
+            syslog(LOG_INFO, "FinalProject (S3_frame_select):                SELECT_FRAMES size_buf_select[%d]=%d", framecnt_select, size_buf_select[framecnt_select]);
+            syslog(LOG_INFO, "FinalProject (S3_frame_select):                SELECT_FRAMES bigbuffer_diff_threshold[%d]=%d", frame_selected_from_bigbuffer_read, bigbuffer_diff_threshold[frame_selected_from_bigbuffer_read]);
+            syslog(LOG_INFO, "FinalProject (S3_frame_select):                SELECT_FRAMES selecting size_buf_read[%d] to store", frame_selected_from_bigbuffer_read);
 
-                ///< Now store the frame into global select buffer
-                store_buf_select(bigbuffer_read, size_buf_read[frame_selected_from_bigbuffer_read], framecnt_select, &frame_time);
+            ///< Now store the frame into global select buffer
+            store_buf_select(bigbuffer_read, size_buf_read[frame_selected_from_bigbuffer_read], framecnt_select, &frame_time);
 
-                ///< We have stored another selected frame
-                framecnt_select++;
+            ///< We have stored another selected frame
+            framecnt_select++;
 
-                //break;
-            }
-        }
-
-        for (i = 0; i < framecnt_select_last; i++) {
-            if (i + 1 < framecnt_select_last) {
-                i_next = i + 1;
-            }
-            else {
-                break;
-            }
-            if (bigbuffer_diff_threshold[i] == next_frame_is_diff && bigbuffer_diff_threshold[i_next] == next_frame_is_same) {
-                ///< Select this stable frame's index in bigbuffer_read for the call to store_buf_select
-                if (i > 0) {
-                    frame_selected_from_bigbuffer_read = (i - 1);
-                }
-                else {
-                    frame_selected_from_bigbuffer_read = (BIGBUFFER_DIFF_THRESHOLD_MAX_NUM_OF_FRAMES_STORED - 1);
-                }
-
-                clock_gettime(MY_CLOCK, &frame_time);
-
-                ///< Store the size of selected frame (in bytes) into global select buffer
-                //syslog(LOG_INFO, "FinalProject (S3_frame_select):                SELECT_FRAMES framecnt_select_first=%d, framecnt_select_last=%d, i=%d, size_buf_read[%d]=%d, size_buf_select[%d]=%d", framecnt_select_first, framecnt_select_last, i, i, size_buf_read[i], framecnt_select, size_buf_select[framecnt_select]);
-                size_buf_select[framecnt_select] = size_buf_read[frame_selected_from_bigbuffer_read];
-                //syslog(LOG_INFO, "FinalProject (S3_frame_select):                SELECT_FRAMES framecnt_select_first=%d, framecnt_select_last=%d, i=%d, size_buf_read[%d]=%d, size_buf_select[%d]=%d", framecnt_select_first, framecnt_select_last, i, i, size_buf_read[i], framecnt_select, size_buf_select[framecnt_select]);
-
-                syslog(LOG_INFO, "FinalProject (S3_frame_select):                SELECT_FRAMES framecnt_select=%d", framecnt_select);
-                syslog(LOG_INFO, "FinalProject (S3_frame_select):                SELECT_FRAMES size_buf_select[%d]=%d", framecnt_select, size_buf_select[framecnt_select]);
-                syslog(LOG_INFO, "FinalProject (S3_frame_select):                SELECT_FRAMES bigbuffer_diff_threshold[%d]=%d", frame_selected_from_bigbuffer_read, bigbuffer_diff_threshold[frame_selected_from_bigbuffer_read]);
-                syslog(LOG_INFO, "FinalProject (S3_frame_select):                SELECT_FRAMES selecting size_buf_read[%d] to store", frame_selected_from_bigbuffer_read);
-
-                ///< Now store the frame into global select buffer
-                store_buf_select(bigbuffer_read, size_buf_read[frame_selected_from_bigbuffer_read], framecnt_select, &frame_time);
-
-                ///< We have stored another selected frame
-                framecnt_select++;
-
-                //break;
-            }
+            //break;
         }
     }
-    else {
-        ///< For testing, store all stable frames into bigbuffer_select
-        for (i = framecnt_select_first; i < framecnt_select_last; i++) {
-            if (i + 1 < framecnt_select_last) {
-                i_next = i + 1;
-            }
-            else {
-                break;
-            }
-            if (bigbuffer_diff_threshold[i] == next_frame_is_diff && bigbuffer_diff_threshold[i_next] == next_frame_is_same) {
-                ///< Select this stable frame's index in bigbuffer_read for the call to store_buf_select
-                if (i > 0) {
-                    frame_selected_from_bigbuffer_read = (i - 1);
-                }
-                else {
-                    frame_selected_from_bigbuffer_read = (BIGBUFFER_DIFF_THRESHOLD_MAX_NUM_OF_FRAMES_STORED - 1);
-                }
 
-                clock_gettime(MY_CLOCK, &frame_time);
-
-                ///< Store the size of selected frame (in bytes) into global select buffer
-                //syslog(LOG_INFO, "FinalProject (S3_frame_select):                SELECT_FRAMES framecnt_select_first=%d, framecnt_select_last=%d, i=%d, size_buf_read[%d]=%d, size_buf_select[%d]=%d", framecnt_select_first, framecnt_select_last, i, i, size_buf_read[i], framecnt_select, size_buf_select[framecnt_select]);
-                size_buf_select[framecnt_select] = size_buf_read[frame_selected_from_bigbuffer_read];
-                //syslog(LOG_INFO, "FinalProject (S3_frame_select):                SELECT_FRAMES framecnt_select_first=%d, framecnt_select_last=%d, i=%d, size_buf_read[%d]=%d, size_buf_select[%d]=%d", framecnt_select_first, framecnt_select_last, i, i, size_buf_read[i], framecnt_select, size_buf_select[framecnt_select]);
-
-                syslog(LOG_INFO, "FinalProject (S3_frame_select):                SELECT_FRAMES framecnt_select=%d", framecnt_select);
-                syslog(LOG_INFO, "FinalProject (S3_frame_select):                SELECT_FRAMES size_buf_select[%d]=%d", framecnt_select, size_buf_select[framecnt_select]);
-                syslog(LOG_INFO, "FinalProject (S3_frame_select):                SELECT_FRAMES bigbuffer_diff_threshold[%d]=%d", frame_selected_from_bigbuffer_read, bigbuffer_diff_threshold[frame_selected_from_bigbuffer_read]);
-                syslog(LOG_INFO, "FinalProject (S3_frame_select):                SELECT_FRAMES selecting size_buf_read[%d] to store", frame_selected_from_bigbuffer_read);
-
-                ///< Now store the frame into global select buffer
-                store_buf_select(bigbuffer_read, size_buf_read[frame_selected_from_bigbuffer_read], framecnt_select, &frame_time);
-
-                ///< We have stored another selected frame
-                framecnt_select++;
-
-                //break;
-            }
-        }
-    }
+    //if (framecnt_select_first > framecnt_select_last) {
+    //    bool selected_frame = false;
+    //    ///< For testing, store all stable frames into bigbuffer_select
+    //    for (i = framecnt_select_first; i < BIGBUFFER_DIFF_THRESHOLD_MAX_NUM_OF_FRAMES_STORED; i++) {
+    //        if (i + 1 < BIGBUFFER_DIFF_THRESHOLD_MAX_NUM_OF_FRAMES_STORED) {
+    //            i_next = i + 1;
+    //        }
+    //        else {
+    //            i_next = 0;
+    //        }
+    //        if (bigbuffer_diff_threshold[i] == next_frame_is_diff && bigbuffer_diff_threshold[i_next] == next_frame_is_same) {
+    //            selected_frame = true;
+    //            ///< Select this stable frame's index in bigbuffer_read for the call to store_buf_select
+    //            if (i > 0) {
+    //                frame_selected_from_bigbuffer_read = (i - 1);
+    //            }
+    //            else {
+    //                frame_selected_from_bigbuffer_read = (BIGBUFFER_DIFF_THRESHOLD_MAX_NUM_OF_FRAMES_STORED - 1);
+    //            }
+    //
+    //            clock_gettime(MY_CLOCK, &frame_time);
+    //
+    //            ///< Store the size of selected frame (in bytes) into global select buffer
+    //            //syslog(LOG_INFO, "FinalProject (S3_frame_select):                SELECT_FRAMES framecnt_select_first=%d, framecnt_select_last=%d, i=%d, size_buf_read[%d]=%d, size_buf_select[%d]=%d", framecnt_select_first, framecnt_select_last, i, i, size_buf_read[i], framecnt_select, size_buf_select[framecnt_select]);
+    //            size_buf_select[framecnt_select] = size_buf_read[frame_selected_from_bigbuffer_read];
+    //            //syslog(LOG_INFO, "FinalProject (S3_frame_select):                SELECT_FRAMES framecnt_select_first=%d, framecnt_select_last=%d, i=%d, size_buf_read[%d]=%d, size_buf_select[%d]=%d", framecnt_select_first, framecnt_select_last, i, i, size_buf_read[i], framecnt_select, size_buf_select[framecnt_select]);
+    //
+    //            syslog(LOG_INFO, "FinalProject (S3_frame_select):                SELECT_FRAMES framecnt_select=%d", framecnt_select);
+    //            syslog(LOG_INFO, "FinalProject (S3_frame_select):                SELECT_FRAMES size_buf_select[%d]=%d", framecnt_select, size_buf_select[framecnt_select]);
+    //            syslog(LOG_INFO, "FinalProject (S3_frame_select):                SELECT_FRAMES bigbuffer_diff_threshold[%d]=%d", frame_selected_from_bigbuffer_read, bigbuffer_diff_threshold[frame_selected_from_bigbuffer_read]);
+    //            syslog(LOG_INFO, "FinalProject (S3_frame_select):                SELECT_FRAMES selecting size_buf_read[%d] to store", frame_selected_from_bigbuffer_read);
+    //
+    //            ///< Now store the frame into global select buffer
+    //            store_buf_select(bigbuffer_read, size_buf_read[frame_selected_from_bigbuffer_read], framecnt_select, &frame_time);
+    //
+    //            ///< We have stored another selected frame
+    //            framecnt_select++;
+    //
+    //            //break;
+    //        }
+    //    }
+    //    if (selected_frame == false) {
+    //        for (i = 0; i < framecnt_select_last; i++) {
+    //            if (i + 1 < framecnt_select_last) {
+    //                i_next = i + 1;
+    //            }
+    //            else {
+    //                break;
+    //            }
+    //            if (bigbuffer_diff_threshold[i] == next_frame_is_diff && bigbuffer_diff_threshold[i_next] == next_frame_is_same) {
+    //                ///< Select this stable frame's index in bigbuffer_read for the call to store_buf_select
+    //                if (i > 0) {
+    //                    frame_selected_from_bigbuffer_read = (i - 1);
+    //                }
+    //                else {
+    //                    frame_selected_from_bigbuffer_read = (BIGBUFFER_DIFF_THRESHOLD_MAX_NUM_OF_FRAMES_STORED - 1);
+    //                }
+    //
+    //                clock_gettime(MY_CLOCK, &frame_time);
+    //
+    //                ///< Store the size of selected frame (in bytes) into global select buffer
+    //                //syslog(LOG_INFO, "FinalProject (S3_frame_select):                SELECT_FRAMES framecnt_select_first=%d, framecnt_select_last=%d, i=%d, size_buf_read[%d]=%d, size_buf_select[%d]=%d", framecnt_select_first, framecnt_select_last, i, i, size_buf_read[i], framecnt_select, size_buf_select[framecnt_select]);
+    //                size_buf_select[framecnt_select] = size_buf_read[frame_selected_from_bigbuffer_read];
+    //                //syslog(LOG_INFO, "FinalProject (S3_frame_select):                SELECT_FRAMES framecnt_select_first=%d, framecnt_select_last=%d, i=%d, size_buf_read[%d]=%d, size_buf_select[%d]=%d", framecnt_select_first, framecnt_select_last, i, i, size_buf_read[i], framecnt_select, size_buf_select[framecnt_select]);
+    //
+    //                syslog(LOG_INFO, "FinalProject (S3_frame_select):                SELECT_FRAMES framecnt_select=%d", framecnt_select);
+    //                syslog(LOG_INFO, "FinalProject (S3_frame_select):                SELECT_FRAMES size_buf_select[%d]=%d", framecnt_select, size_buf_select[framecnt_select]);
+    //                syslog(LOG_INFO, "FinalProject (S3_frame_select):                SELECT_FRAMES bigbuffer_diff_threshold[%d]=%d", frame_selected_from_bigbuffer_read, bigbuffer_diff_threshold[frame_selected_from_bigbuffer_read]);
+    //                syslog(LOG_INFO, "FinalProject (S3_frame_select):                SELECT_FRAMES selecting size_buf_read[%d] to store", frame_selected_from_bigbuffer_read);
+    //
+    //                ///< Now store the frame into global select buffer
+    //                store_buf_select(bigbuffer_read, size_buf_read[frame_selected_from_bigbuffer_read], framecnt_select, &frame_time);
+    //
+    //                ///< We have stored another selected frame
+    //                framecnt_select++;
+    //
+    //                //break;
+    //            }
+    //        }
+    //    }
+    //    else {
+    //
+    //    }
+    //}
+    //else {
+    //    ///< For testing, store all stable frames into bigbuffer_select
+    //    for (i = framecnt_select_first; i < framecnt_select_last; i++) {
+    //        if (i + 1 < framecnt_select_last) {
+    //            i_next = i + 1;
+    //        }
+    //        else {
+    //            break;
+    //        }
+    //        if (bigbuffer_diff_threshold[i] == next_frame_is_diff && bigbuffer_diff_threshold[i_next] == next_frame_is_same) {
+    //            ///< Select this stable frame's index in bigbuffer_read for the call to store_buf_select
+    //            if (i > 0) {
+    //                frame_selected_from_bigbuffer_read = (i - 1);
+    //            }
+    //            else {
+    //                frame_selected_from_bigbuffer_read = (BIGBUFFER_DIFF_THRESHOLD_MAX_NUM_OF_FRAMES_STORED - 1);
+    //            }
+    //
+    //            clock_gettime(MY_CLOCK, &frame_time);
+    //
+    //            ///< Store the size of selected frame (in bytes) into global select buffer
+    //            //syslog(LOG_INFO, "FinalProject (S3_frame_select):                SELECT_FRAMES framecnt_select_first=%d, framecnt_select_last=%d, i=%d, size_buf_read[%d]=%d, size_buf_select[%d]=%d", framecnt_select_first, framecnt_select_last, i, i, size_buf_read[i], framecnt_select, size_buf_select[framecnt_select]);
+    //            size_buf_select[framecnt_select] = size_buf_read[frame_selected_from_bigbuffer_read];
+    //            //syslog(LOG_INFO, "FinalProject (S3_frame_select):                SELECT_FRAMES framecnt_select_first=%d, framecnt_select_last=%d, i=%d, size_buf_read[%d]=%d, size_buf_select[%d]=%d", framecnt_select_first, framecnt_select_last, i, i, size_buf_read[i], framecnt_select, size_buf_select[framecnt_select]);
+    //
+    //            syslog(LOG_INFO, "FinalProject (S3_frame_select):                SELECT_FRAMES framecnt_select=%d", framecnt_select);
+    //            syslog(LOG_INFO, "FinalProject (S3_frame_select):                SELECT_FRAMES size_buf_select[%d]=%d", framecnt_select, size_buf_select[framecnt_select]);
+    //            syslog(LOG_INFO, "FinalProject (S3_frame_select):                SELECT_FRAMES bigbuffer_diff_threshold[%d]=%d", frame_selected_from_bigbuffer_read, bigbuffer_diff_threshold[frame_selected_from_bigbuffer_read]);
+    //            syslog(LOG_INFO, "FinalProject (S3_frame_select):                SELECT_FRAMES selecting size_buf_read[%d] to store", frame_selected_from_bigbuffer_read);
+    //
+    //            ///< Now store the frame into global select buffer
+    //            store_buf_select(bigbuffer_read, size_buf_read[frame_selected_from_bigbuffer_read], framecnt_select, &frame_time);
+    //
+    //            ///< We have stored another selected frame
+    //            framecnt_select++;
+    //
+    //            //break;
+    //        }
+    //    }
+    //}
 }
 
 static void process_frames(void) {
@@ -1036,7 +1123,7 @@ static int read_frame(void)
         store_buf_read(buffers[buf.index].start, buf.bytesused, framecnt_read, &frame_time);
 
         syslog(LOG_ERR, "FinalProject (S1_frame_acquisition):           READ_FRAME framecnt_read=%d", framecnt_read);
-        syslog(LOG_ERR, "FinalProject (S1_frame_acquisition):           READ_FRAME size_buf_read[%d]=%d", framecnt_read % BIGBUFFER_READ_MAX_NUM_OF_FRAMES_STORED, size_buf_read[framecnt_read % BIGBUFFER_READ_MAX_NUM_OF_FRAMES_STORED]);
+        syslog(LOG_ERR, "FinalProject (S1_frame_acquisition):           READ_FRAME size_buf_read[%d]=%d", framecnt_read, size_buf_read[framecnt_read]);
 
         ///< We have stored another read frame
         framecnt_read++;
@@ -2224,6 +2311,7 @@ int main(int argc, char** argv)
     unsigned char* pptr = bigbuffer_read;
     unsigned int diff;
     printf("\n");
+    printf("S1_frame_acquisition:    BEGINNING_FRAMES_IGNORED = %d\n", BEGINNING_FRAMES_IGNORED);
     printf("S1_frame_acquisition:    framecnt_read = %d\n", framecnt_read);
     printf("S2_frame_diff_threshold: framecnt_diff_threshold = %d\n", framecnt_diff_threshold);
     printf("S2_frame_diff_threshold: framecnt_next_untouched = %d\n", framecnt_next_untouched);
