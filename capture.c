@@ -694,21 +694,21 @@ static void mark_frames(void) {
     }
     else {
         ///< Check if current frame is different from next frame
-        //for (i = framecnt_diff_threshold_first; i < framecnt_diff_threshold_last; i++) {
-        //
-        //    ///< Calculate sum of difference between each byte of current frame and next frame
-        //    diff = 0;
-        //    for (j = 0; j < PHOTO_RES; j++) {
-        //        diff += abs((unsigned int)bigbuffer_read_ptr[i * PHOTO_RES + j] - (unsigned int)bigbuffer_read_ptr[(i + 1) * PHOTO_RES + j]);
-        //    }
-        //
-        syslog(LOG_INFO, "FinalProject (S2_frame_difference_threshold):  MARK_FRAMES framecnt_diff_threshold=%d", framecnt_diff_threshold);
-        //    syslog(LOG_INFO, "FinalProject (S2_frame_difference_threshold):  MARK_FRAMES size_buf_read[%d]=%d", i, size_buf_read[i]);
-        //    syslog(LOG_INFO, "FinalProject (S2_frame_difference_threshold):  MARK_FRAMES bigbuffer_read[%d] - bigbuffer_read[%d + 1]=%u", i, i, diff);
-        //
-        //    ///< We have performed another frame difference calculation
-        //    framecnt_diff_threshold++;
-        //}
+        for (i = framecnt_diff_threshold_first; i < framecnt_diff_threshold_last; i++) {
+        
+            ///< Calculate sum of difference between each byte of current frame and next frame
+            diff = 0;
+            for (j = 0; j < PHOTO_RES; j++) {
+                diff += abs((unsigned int)bigbuffer_read_ptr[i * PHOTO_RES + j] - (unsigned int)bigbuffer_read_ptr[(i + 1) * PHOTO_RES + j]);
+            }
+        
+            syslog(LOG_INFO, "FinalProject (S2_frame_difference_threshold):  MARK_FRAMES framecnt_diff_threshold=%d", framecnt_diff_threshold);
+            syslog(LOG_INFO, "FinalProject (S2_frame_difference_threshold):  MARK_FRAMES size_buf_read[%d]=%d", i, size_buf_read[i]);
+            syslog(LOG_INFO, "FinalProject (S2_frame_difference_threshold):  MARK_FRAMES bigbuffer_read[%d] - bigbuffer_read[%d + 1]=%u", i, i, diff);
+        
+            ///< We have performed another frame difference calculation
+            framecnt_diff_threshold++;
+        }
         if (first_diff_threshold < BIGBUFFER_DIFF_THRESHOLD_MAX_NUM_OF_FRAMES_STORED) {
             if (first_diff_threshold == 0) {
                 syslog(LOG_INFO, "FinalProject (S2_frame_difference_threshold):  MARK_FRAMES zero");
@@ -719,7 +719,7 @@ static void mark_frames(void) {
 
                 ///< We have performed another frame difference calculation
                 //framecnt_diff_threshold = framecnt_diff_threshold + (framecnt_diff_threshold_last - framecnt_diff_threshold_first);
-                framecnt_diff_threshold = framecnt_diff_threshold + 1;
+                //framecnt_diff_threshold = framecnt_diff_threshold + 1;
             }
             else if ((first_diff_threshold % 5) < (((framecnt_diff_threshold_first + framecnt_diff_threshold_last)/2) % 5)) {
                 syslog(LOG_INFO, "FinalProject (S2_frame_difference_threshold):  MARK_FRAMES add");
@@ -738,7 +738,7 @@ static void mark_frames(void) {
 
                 ///< We have performed another frame difference calculation
                 //framecnt_diff_threshold = framecnt_diff_threshold + (framecnt_diff_threshold_last - framecnt_diff_threshold_first);
-                framecnt_diff_threshold = framecnt_diff_threshold + 5;
+                //framecnt_diff_threshold = framecnt_diff_threshold + 5;
             }
             else {
                 syslog(LOG_INFO, "FinalProject (S2_frame_difference_threshold):  MARK_FRAMES subtract");
@@ -757,7 +757,7 @@ static void mark_frames(void) {
 
                 ///< We have performed another frame difference calculation
                 //framecnt_diff_threshold = framecnt_diff_threshold + (framecnt_diff_threshold_last - framecnt_diff_threshold_first);
-                framecnt_diff_threshold = framecnt_diff_threshold + 5;
+                //framecnt_diff_threshold = framecnt_diff_threshold + 5;
             }
         }
         else {
@@ -766,7 +766,7 @@ static void mark_frames(void) {
 
             ///< We have performed another frame difference calculation
             //framecnt_diff_threshold = framecnt_diff_threshold + (framecnt_diff_threshold_last - framecnt_diff_threshold_first);
-            framecnt_diff_threshold = framecnt_diff_threshold + 5;
+            //framecnt_diff_threshold = framecnt_diff_threshold + 5;
         }
     }
     ///< Check if current frame is different from next frame
