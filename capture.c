@@ -95,7 +95,7 @@
 
 ///< Desired frequencies in Hz for all S0-S5
 #define S0_FREQ (120)
-#define S1_FREQ (20)
+#define S1_FREQ (10)
 #define S2_FREQ (2)
 #define S3_FREQ (1)
 #define S4_FREQ (0.5)
@@ -110,6 +110,9 @@
 
 ///< Resolution of pictures captured by S1 Frame Acquisition
 #define PHOTO_RES (1280*960)
+
+///< Number of frames to initially skip during first S1 Frame Acquisition
+#define NUM_FRAMES_INITIALLY_SKIPPED ((2*S1_FREQ)/5)
 
 ///< Store 60 seconds of data at 20 Hz
 #define BIGBUFFER_READ_MAX_NUM_OF_FRAMES_STORED (S0_RUN_TIME_SEC*S1_FREQ)
@@ -202,7 +205,7 @@ int size_buf_read[BIGBUFFER_READ_MAX_NUM_OF_FRAMES_STORED];
 static int size_buf_i = 0;
 
 ///< Counter for amount of frames read by S1 Frame Acquisition. Always ignore the first 8 frames
-int framecnt_read = -8;
+int framecnt_read = -(NUM_FRAMES_INITIALLY_SKIPPED);
 
 ///< Buffer info for S2 Frame Difference Threshold
 enum frame_quality {untouched, next_frame_is_diff, next_frame_is_same};
