@@ -199,11 +199,9 @@ double current_realtime_last_seq = 0;
 
 ///< Buffer info for S1 Frame Acquisition
 unsigned char bigbuffer_read[PHOTO_RES*BIGBUFFER_READ_MAX_NUM_OF_FRAMES_STORED];
-static int bigbuffer_read_i = 0;
-void* p_buf[BIGBUFFER_READ_MAX_NUM_OF_FRAMES_STORED];
-static int p_buf_i = 0;
 int size_buf_read[BIGBUFFER_READ_MAX_NUM_OF_FRAMES_STORED];
-static int size_buf_i = 0;
+int head_read = 0;
+int tail_read = 0;
 
 ///< Counter for amount of frames read by S1 Frame Acquisition. Always ignore the first 8 frames
 int framecnt_read = (-(NUM_FRAMES_INITIALLY_SKIPPED));
@@ -212,6 +210,8 @@ int framecnt_read = (-(NUM_FRAMES_INITIALLY_SKIPPED));
 //enum frame_quality {untouched, next_frame_is_diff, next_frame_is_same};
 enum frame_quality {untouched, good, bad};
 enum frame_quality bigbuffer_diff_threshold[BIGBUFFER_DIFF_THRESHOLD_MAX_NUM_OF_FRAMES_STORED];
+int head_diff_threshold = 0;
+int tail_diff_threshold = 0;
 
 ///< Counter for amount of frames marked by S2 Frame Difference Threshold
 int framecnt_diff_threshold = 0;
@@ -225,6 +225,8 @@ int first_diff_threshold = -1;
 ///< Buffer info for S3 Frame Select
 unsigned char bigbuffer_select[PHOTO_RES*BIGBUFFER_SELECT_MAX_NUM_OF_FRAMES_STORED];
 int size_buf_select[BIGBUFFER_SELECT_MAX_NUM_OF_FRAMES_STORED];
+int head_select = 0;
+int tail_select = 0;
 
 ///< Counter for amount of frames selected by S3 Frame Select
 int framecnt_select = 0;
@@ -245,6 +247,8 @@ int frame_selected_from_bigbuffer_select = 0;
 ///< Buffer info for S4 Frame Process
 unsigned char bigbuffer_process[PHOTO_RES*BIGBUFFER_PROCESS_MAX_NUM_OF_FRAMES_STORED];
 int size_buf_process[BIGBUFFER_PROCESS_MAX_NUM_OF_FRAMES_STORED];
+int head_process = 0;
+int tail_process = 0;
 
 ///< Counter for amount of frames read by S5 Frame Writeback
 int framecnt_writeback = 0;
@@ -335,7 +339,6 @@ static void dump_ppm(const void* p, int size, unsigned int tag, struct timespec*
         total += written;
     } while (total < size);
 
-    //printf("wrote %d bytes\n", total);
     syslog(LOG_INFO, "FinalProject (S5_frame_writeback):             DUMP_PPM Wrote %04d %d bytes\n", tag, total);
 
     close(dumpfd);
@@ -365,12 +368,10 @@ static void dump_pgm(const void* p, int size, unsigned int tag, struct timespec*
 
     do
     {
-        //written = write(dumpfd, p, size);
         written = write(dumpfd, (const void*)(&(pptr[size*framecnt_writeback])), size);
         total += written;
     } while (total < size);
 
-    //printf("wrote %d bytes\n", total);
     syslog(LOG_INFO, "FinalProject (S5_frame_writeback):             DUMP_PGM Wrote frame %04d (%d bytes)", tag, total);
 
     close(dumpfd);
@@ -396,7 +397,6 @@ static void store_buf_select(const void* p, int size, unsigned int tag, struct t
         unsigned char* pptr = (unsigned char*)p;
 
         for (i = 0; i < size; i = i + 1) {
-            //syslog(LOG_INFO, "FinalProject (S3_frame_select):                STORE_BUF_SELECT i=%d, size=%d, framecnt_select=%d", i, size, framecnt_select);
             bigbuffer_select[(PHOTO_RES*framecnt_select) + i] = pptr[(PHOTO_RES*frame_selected_from_bigbuffer_read) + i];
         }
     }
@@ -409,9 +409,7 @@ static void store_buf_process(const void* p, int size, unsigned int tag, struct 
         unsigned char* pptr = (unsigned char*)p;
         syslog(LOG_INFO, "FinalProject (S4_frame_process):               STORE_BUF_PROCESS size=%d, framecnt_process=%d, frame_selected_from_bigbuffer_select=%d", size, size_buf_process[frame_selected_from_bigbuffer_select], framecnt_process, frame_selected_from_bigbuffer_select);
         for (i = 0; i < size; i = i + 1) {
-            //syslog(LOG_INFO, "FinalProject (S4_frame_process):               STORE_BUF_PROCESS i=%d, size=%d, framecnt_process=%d", i, size, framecnt_process);
             bigbuffer_process[(size*framecnt_process) + i] = pptr[i];
-            //bigbuffer_process[i] = pptr[i];
         }
     }
 }
@@ -486,16 +484,12 @@ static void process_image(const void* p, int size)
     // record when process was called
     clock_gettime(MY_CLOCK, &frame_time);
 
-    //printf("frame %d: ", framecnt);
-    //syslog(LOG_INFO, "FinalProject (S4_frame_process):               PROCESS_IMAGE framecnt_process=%d", framecnt_process);
-
     // This just dumps the frame to a file now, but you could replace with whatever image
     // processing you wish.
     //
 
     if (fmt.fmt.pix.pixelformat == V4L2_PIX_FMT_GREY)
     {
-        //printf("Dump graymap as-is size %d\n", size);
         syslog(LOG_INFO, "FinalProject (S4_frame_process):               PROCESS_IMAGE Dump graymap as-is size %d\n", size);
 
 
@@ -504,8 +498,6 @@ static void process_image(const void* p, int size)
             bigbuffer[i] = pptr[i];
         }
 
-        //dump_pgm(p, size, framecnt, &frame_time);
-        //dump_pgm(p, size, framecnt_process, &frame_time);
         size_buf_process[framecnt_process] = size;
         store_buf_process(bigbuffer, size, framecnt_process, &frame_time);
     }
@@ -527,12 +519,9 @@ static void process_image(const void* p, int size)
 
         if (framecnt_process > -1)
         {
-            //dump_ppm(bigbuffer, ((size * 6) / 4), framecnt, &frame_time);
-            //dump_ppm(bigbuffer, ((size * 6) / 4), framecnt_process, &frame_time);
             size_buf_process[framecnt_process] = size;
             store_buf_process(bigbuffer, ((size * 6) / 4), framecnt_process, &frame_time);
 
-            //printf("Dump YUYV converted to RGB size %d\n", size);
             syslog(LOG_INFO, "FinalProject (S4_frame_process):               PROCESS_IMAGE Dump YUYV converted to RGB size %d\n", size);
 
         }
@@ -544,25 +533,17 @@ static void process_image(const void* p, int size)
         for (i = 0, newi = 0; i < size; i = i + 4, newi = newi + 2)
         {
             // Y1=first byte and Y2=third byte
-            //bigbuffer[newi] = pptr[i];
-            //bigbuffer[newi + 1] = pptr[i + 2];
             bigbuffer[newi] = pptr[(PHOTO_RES*frame_selected_from_bigbuffer_select) + i];
             bigbuffer[newi + 1] = pptr[(PHOTO_RES*frame_selected_from_bigbuffer_select) + i + 2];
         }
-        //syslog(LOG_INFO, "FinalProject (S4_frame_process):               PROCESS_IMAGE first byte of processed frame %d is %u", frame_selected_from_bigbuffer_select, bigbuffer[0]);
-        //syslog(LOG_INFO, "FinalProject (S4_frame_process):               PROCESS_IMAGE second byte of processed frame %d is %u", frame_selected_from_bigbuffer_select, bigbuffer[1]);
-        //syslog(LOG_INFO, "FinalProject (S4_frame_process):               PROCESS_IMAGE third byte of processed frame %d is %u", frame_selected_from_bigbuffer_select, bigbuffer[2]);
-        //syslog(LOG_INFO, "FinalProject (S4_frame_process):               PROCESS_IMAGE four byte of processed frame %d is %u", frame_selected_from_bigbuffer_select, bigbuffer[3]);
+
         if (framecnt_process > -1)
         {
-            //dump_pgm(bigbuffer, (size / 2), framecnt, &frame_time);
-            //dump_pgm(bigbuffer, (size / 2), framecnt_process, &frame_time);
             syslog(LOG_INFO, "FinalProject (S4_frame_process):               PROCESS_IMAGE about to fill size_buf_process[%d] with %d", framecnt_process, (size / 2));
             size_buf_process[framecnt_process] = (size / 2);
             syslog(LOG_INFO, "FinalProject (S4_frame_process):               PROCESS_IMAGE about to store %d", framecnt_process);
             store_buf_process(bigbuffer, (size / 2), framecnt_process, &frame_time);
 
-            //printf("Dump YUYV converted to YY size %d\n", size);
             syslog(LOG_INFO, "FinalProject (S4_frame_process):               PROCESS_IMAGE Dump YUYV (%d) converted to YY (%d)\n", size, (size / 2));
         }
 #endif
@@ -571,17 +552,13 @@ static void process_image(const void* p, int size)
 
     else if (fmt.fmt.pix.pixelformat == V4L2_PIX_FMT_RGB24)
     {
-        //printf("Dump RGB as-is size %d\n", size);
         syslog(LOG_INFO, "FinalProject (S4_frame_process):               Dump RGB as-is size %d\n", size);
 
-        //dump_ppm(p, size, framecnt, &frame_time);
-        //dump_ppm(p, size, framecnt_process, &frame_time);
         size_buf_process[framecnt_process] = size;
         store_buf_process(bigbuffer, size, framecnt_process, &frame_time);
     }
     else
     {
-        //printf("ERROR - unknown dump format\n");
         syslog(LOG_ERR, "FinalProject (S4_frame_process):               ERROR - unknown dump format\n");
     }
 
@@ -591,7 +568,6 @@ static void process_image(const void* p, int size)
     //syslog(LOG_ERR, ".");
 
     fflush(stdout);
-    //syslog(LOG_INFO, "FinalProject (S4_frame_process):               FINISHED PROCESSING FRAME %d", framecnt_process);
 }
 
 static void mark_frames(void) {
@@ -605,67 +581,7 @@ static void mark_frames(void) {
     framecnt_diff_threshold_last = framecnt_read;
 
     syslog(LOG_INFO, "FinalProject (S2_frame_difference_threshold):  MARK_FRAMES framecnt_diff_threshold_first=%d, framecnt_diff_threshold_last=%d", framecnt_diff_threshold_first, framecnt_diff_threshold_last);
-
-    ///< For testing, mark only first frame as stable
-    //for (i = framecnt_diff_threshold_first; i < framecnt_diff_threshold_last; i++) {
-    //    diff = 0;
-    //    for (j = 0; j < PHOTO_RES; j++) {
-    //        diff += abs((unsigned int)bigbuffer_read_ptr[i*PHOTO_RES + j] - (unsigned int)bigbuffer_read_ptr[(i + 1)*PHOTO_RES + j]);
-    //    }
-    //
-    //    syslog(LOG_INFO, "FinalProject (S2_frame_difference_threshold):  MARK_FRAMES framecnt_diff_threshold=%d", framecnt_diff_threshold);
-    //    syslog(LOG_INFO, "FinalProject (S2_frame_difference_threshold):  MARK_FRAMES size_buf_read[%d]=%d", i, size_buf_read[i]);
-    //    syslog(LOG_INFO, "FinalProject (S2_frame_difference_threshold):  MARK_FRAMES bigbuffer_read[%d] - bigbuffer_read[%d + 1]=%u", i, i, diff);
-    //
-    //    if (i == framecnt_diff_threshold_first) {
-    //        bigbuffer_diff_threshold[i] = next_frame_is_diff;
-    //        framecnt_next_diff++;
-    //        framecnt_next_untouched--;
-    //    }
-    //    else {
-    //        bigbuffer_diff_threshold[i] = next_frame_is_same;
-    //        framecnt_next_same++;
-    //        framecnt_next_untouched--;
-    //    }
-    //
-    //    ///< We have stored another frame_quality
-    //    framecnt_diff_threshold++;
-    //}
-
     syslog(LOG_INFO, "FinalProject (S2_frame_difference_threshold):  MARK_FRAMES first_diff_threshold=%d", first_diff_threshold);
-
-    ///< Check if current frame is different from next frame
-    //for (i = framecnt_diff_threshold_first; i < framecnt_diff_threshold_last; i++) {
-    //
-    //    ///< Calculate sum of difference between each byte of current frame and next frame
-    //    diff = 0;
-    //    for (j = 0; j < PHOTO_RES; j++) {
-    //        diff += abs((unsigned int)bigbuffer_read_ptr[i * PHOTO_RES + j] - (unsigned int)bigbuffer_read_ptr[(i + 1) * PHOTO_RES + j]);
-    //    }
-    //
-    //    syslog(LOG_INFO, "FinalProject (S2_frame_difference_threshold):  MARK_FRAMES framecnt_diff_threshold=%d", framecnt_diff_threshold);
-    //    syslog(LOG_INFO, "FinalProject (S2_frame_difference_threshold):  MARK_FRAMES size_buf_read[%d]=%d", i, size_buf_read[i]);
-    //    syslog(LOG_INFO, "FinalProject (S2_frame_difference_threshold):  MARK_FRAMES bigbuffer_read[%d] - bigbuffer_read[%d + 1]=%u", i, i, diff);
-    //
-    //    if (first_diff_threshold < 0) {
-    //        ///< If the next frame is significantly different from the current frame then mark 2 frames before as a good frame
-    //        if (diff > DIFF_THRESHOLD) {
-    //            first_diff_threshold = i;
-    //            bigbuffer_diff_threshold[first_diff_threshold + 2] = good;
-    //            framecnt_next_diff++;
-    //            framecnt_next_untouched--;
-    //        }
-    //    }
-    //    else {
-    //        first_diff_threshold = first_diff_threshold + 2 * (S1_FREQ / S2_FREQ);
-    //        bigbuffer_diff_threshold[first_diff_threshold + 2] = good;
-    //        framecnt_next_diff++;
-    //        framecnt_next_untouched--;
-    //    }
-    //
-    //    ///< We have performed another frame difference calculation
-    //    framecnt_diff_threshold++;
-    //}
 
     if (first_diff_threshold < 0) {
         ///< Check if current frame is different from next frame
@@ -710,6 +626,8 @@ static void mark_frames(void) {
             ///< We have performed another frame difference calculation
             framecnt_diff_threshold++;
         }
+
+        ///< Mark next good frame with shotgun method
         if (first_diff_threshold < BIGBUFFER_DIFF_THRESHOLD_MAX_NUM_OF_FRAMES_STORED) {
             if (first_diff_threshold == 0) {
                 syslog(LOG_INFO, "FinalProject (S2_frame_difference_threshold):  MARK_FRAMES zero");
@@ -717,10 +635,6 @@ static void mark_frames(void) {
                 bigbuffer_diff_threshold[first_diff_threshold + 1] = good;
                 framecnt_next_diff++;
                 framecnt_next_untouched--;
-
-                ///< We have performed another frame difference calculation
-                //framecnt_diff_threshold = framecnt_diff_threshold + (framecnt_diff_threshold_last - framecnt_diff_threshold_first);
-                //framecnt_diff_threshold = framecnt_diff_threshold + 1;
             }
             else if ((first_diff_threshold % 5) < (((framecnt_diff_threshold_first + framecnt_diff_threshold_last)/2) % 5)) {
                 syslog(LOG_INFO, "FinalProject (S2_frame_difference_threshold):  MARK_FRAMES add");
@@ -736,10 +650,6 @@ static void mark_frames(void) {
 
                 framecnt_next_diff++;
                 framecnt_next_untouched--;
-
-                ///< We have performed another frame difference calculation
-                //framecnt_diff_threshold = framecnt_diff_threshold + (framecnt_diff_threshold_last - framecnt_diff_threshold_first);
-                //framecnt_diff_threshold = framecnt_diff_threshold + 5;
             }
             else {
                 syslog(LOG_INFO, "FinalProject (S2_frame_difference_threshold):  MARK_FRAMES subtract");
@@ -755,49 +665,13 @@ static void mark_frames(void) {
 
                 framecnt_next_diff++;
                 framecnt_next_untouched--;
-
-                ///< We have performed another frame difference calculation
-                //framecnt_diff_threshold = framecnt_diff_threshold + (framecnt_diff_threshold_last - framecnt_diff_threshold_first);
-                //framecnt_diff_threshold = framecnt_diff_threshold + 5;
             }
         }
         else {
             framecnt_next_diff++;
             framecnt_next_untouched--;
-
-            ///< We have performed another frame difference calculation
-            //framecnt_diff_threshold = framecnt_diff_threshold + (framecnt_diff_threshold_last - framecnt_diff_threshold_first);
-            //framecnt_diff_threshold = framecnt_diff_threshold + 5;
         }
     }
-    ///< Check if current frame is different from next frame
-    //for (i = framecnt_diff_threshold_first; i < framecnt_diff_threshold_last; i++) {
-    //
-    //    ///< Calculate sum of difference between each byte of current frame and next frame
-    //    diff = 0;
-    //    for(j = 0; j < PHOTO_RES; j++){
-    //        diff += abs((unsigned int)bigbuffer_read_ptr[i*PHOTO_RES + j] - (unsigned int)bigbuffer_read_ptr[(i + 1)*PHOTO_RES + j]);
-    //    }
-    //
-    //    syslog(LOG_INFO, "FinalProject (S2_frame_difference_threshold):  MARK_FRAMES framecnt_diff_threshold=%d", framecnt_diff_threshold);
-    //    syslog(LOG_INFO, "FinalProject (S2_frame_difference_threshold):  MARK_FRAMES size_buf_read[%d]=%d", i, size_buf_read[i]);
-    //    syslog(LOG_INFO, "FinalProject (S2_frame_difference_threshold):  MARK_FRAMES bigbuffer_read[%d] - bigbuffer_read[%d + 1]=%u", i, i, diff);
-    //
-    //    ///< If the next frame is significantly different from the current frame then mark as such
-    //    if (diff > DIFF_THRESHOLD) {
-    //        bigbuffer_diff_threshold[i] = next_frame_is_diff;
-    //        framecnt_next_diff++;
-    //        framecnt_next_untouched--;
-    //    }
-    //    else {
-    //        bigbuffer_diff_threshold[i] = next_frame_is_same;
-    //        framecnt_next_same++;
-    //        framecnt_next_untouched--;
-    //    }
-    //
-    //    ///< We have performed another frame difference calculation
-    //    framecnt_diff_threshold++;
-    //}
 }
 
 static void select_frames(void) {
@@ -809,24 +683,6 @@ static void select_frames(void) {
     framecnt_select_last = framecnt_diff_threshold;
     syslog(LOG_INFO, "FinalProject (S3_frame_select):                SELECT_FRAMES framecnt_select_first=%d, framecnt_select_last=%d", framecnt_select_first, framecnt_select_last);
 
-    ///< For testing, select last frame read by S1_frame_acquisition
-    //frame_selected_from_bigbuffer_read = framecnt_read - 1;
-    //
-    //if (frame_selected_from_bigbuffer_read >= 0) {
-    //    clock_gettime(MY_CLOCK, &frame_time);
-    //
-    //    ///< Store the size of selected frame (in bytes) into global select buffer
-    //    size_buf_select[framecnt_select] = size_buf_read[frame_selected_from_bigbuffer_read];
-    //
-    //    ///< Now store the frame into global select buffer
-    //    store_buf_select(bigbuffer_read, size_buf_read[frame_selected_from_bigbuffer_read], framecnt_select, &frame_time);
-    //
-    //    //syslog(LOG_INFO, "FinalProject (S3_frame_select):                SELECT_FRAMES frame_selected_from_bigbuffer_read=%d, framecnt_read=%d, framecnt_select=%d", frame_selected_from_bigbuffer_read, framecnt_read, framecnt_select);
-    //
-    //    ///< We have stored another selected frame
-    //    framecnt_select++;
-    //}
-
     ///< For testing, store all stable frames into bigbuffer_select
     for (i = framecnt_select_first; i < framecnt_select_last; i++) {
         if (bigbuffer_diff_threshold[i] == good) {
@@ -836,9 +692,7 @@ static void select_frames(void) {
             clock_gettime(MY_CLOCK, &frame_time);
     
             ///< Store the size of selected frame (in bytes) into global select buffer
-            //syslog(LOG_INFO, "FinalProject (S3_frame_select):                SELECT_FRAMES framecnt_select_first=%d, framecnt_select_last=%d, i=%d, size_buf_read[%d]=%d, size_buf_select[%d]=%d", framecnt_select_first, framecnt_select_last, i, i, size_buf_read[i], framecnt_select, size_buf_select[framecnt_select]);
             size_buf_select[framecnt_select] = size_buf_read[frame_selected_from_bigbuffer_read];
-            //syslog(LOG_INFO, "FinalProject (S3_frame_select):                SELECT_FRAMES framecnt_select_first=%d, framecnt_select_last=%d, i=%d, size_buf_read[%d]=%d, size_buf_select[%d]=%d", framecnt_select_first, framecnt_select_last, i, i, size_buf_read[i], framecnt_select, size_buf_select[framecnt_select]);
     
             syslog(LOG_INFO, "FinalProject (S3_frame_select):                SELECT_FRAMES framecnt_select=%d", framecnt_select);
             syslog(LOG_INFO, "FinalProject (S3_frame_select):                SELECT_FRAMES size_buf_select[%d]=%d", framecnt_select, size_buf_select[framecnt_select]);
@@ -850,8 +704,6 @@ static void select_frames(void) {
     
             ///< We have stored another selected frame
             framecnt_select++;
-
-            //break;
         }
     }
 }
@@ -878,16 +730,6 @@ static void process_frames(void) {
 
         syslog(LOG_INFO, "FinalProject (S4_frame_process):               PROCESS_FRAMES framecnt_process=%d", framecnt_process);
         syslog(LOG_INFO, "FinalProject (S4_frame_process):               PROCESS_FRAMES size_buf_select[%d]=%d, size_buf_process[%d]=%d", i, size_buf_select[i], i, size_buf_process[i]);
-
-        //syslog(LOG_INFO, "FinalProject (S4_frame_process):               PROCESS_FRAMES size_buf_process[%d]=%d", i, size_buf_process[i]);
-
-        ///< Store the size of selected frame (in bytes) into global select buffer
-        //syslog(LOG_INFO, "FinalProject (S4_frame_process):               PROCESS_FRAMES framecnt_select_first=%d, framecnt_select_last=%d, i=%d, size_buf_read[%d]=%d, size_buf_select[%d]=%d", framecnt_select_first, framecnt_select_last, i, i, size_buf_read[i], framecnt_select, size_buf_select[framecnt_select]);
-        //size_buf_process[framecnt_process] = size_buf_select[i];
-        //syslog(LOG_INFO, "FinalProject (S3_frame_select):               PROCESS_FRAMES framecnt_select_first=%d, framecnt_select_last=%d, i=%d, size_buf_read[%d]=%d, size_buf_select[%d]=%d", framecnt_select_first, framecnt_select_last, i, i, size_buf_read[i], framecnt_select, size_buf_select[framecnt_select]);
-
-        ///< Now store the frame into global select buffer
-        //store_buf_process(bigbuffer_select, size_buf_select[i], framecnt_process, &frame_time);
 
         ///< We have stored another processed frame
         framecnt_process++;
@@ -1009,8 +851,6 @@ static int read_frame(void)
 
         assert(buf.index < n_buffers);
 
-        //process_image(buffers[buf.index].start, buf.bytesused);
-
         ///< Declare and grab the time frame has been read
         struct timespec frame_time;
         clock_gettime(MY_CLOCK, &frame_time);
@@ -1088,11 +928,8 @@ static void mainloop(void)
     // 250 million nsec is a 250 msec delay, for 4 fps
     // 1 sec for 1 fps
     //
-    //read_delay.tv_sec = 1;
-    //read_delay.tv_nsec = (1.0/S1_FREQ)*(NANOSEC_PER_SEC);
 
     ///< S1 Frame Acquisition will invoke mainloop() at S1_FREQ Hz. Upon each invocation, we should only read 1 frame
-    //count = frame_count;
     count = 1;
 
     while (count > 0)
@@ -1121,7 +958,6 @@ static void mainloop(void)
 
             if (0 == r)
             {
-                //fprintf(stderr, "select timeout\n");
                 syslog(LOG_ERR, "FinalProject (S1_frame_acquisition):           MAINLOOP select timeout\n");
 
                 exit(EXIT_FAILURE);
