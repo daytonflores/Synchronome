@@ -153,6 +153,9 @@
 ///< Raspberry Pi 4b+ has 4 cores
 #define NUM_OF_CPU_CORES 4
 
+///< S0 Sequencer will run on this core
+#define SEQ_CORE 3
+
 ///< All services S1-S5 will run on this core
 #define RT_CORE 2
 
@@ -1955,7 +1958,18 @@ int main(int argc, char** argv)
     }
 
     main_param.sched_priority = rt_max_prio;
-    rc = sched_setparam(getpid(), & main_param);
+
+    rc = sched_setscheduler(getpid(), SCHED_FIFO, &main_param);
+
+    if (rc < EXIT_SUCCESS) {
+        perror("main_param");
+    }
+
+    ///< Clear the current threads CPU set then assign it to CPU number RT_CORE
+    CPU_ZERO(&threadcpu);
+    cpuidx = (SEQ_CORE);
+    CPU_SET(cpuidx, &threadcpu);
+    rc = sched_setaffinity(getpid(), sizeof(cpu_set_t), &threadcpu);
 
     if (rc < EXIT_SUCCESS) {
         perror("main_param");
