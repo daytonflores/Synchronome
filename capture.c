@@ -102,7 +102,7 @@
 #define S5_FREQ (0.25)
 
 ///< Desired time to run in s
-#define S0_RUN_TIME_SEC (60)
+#define S0_RUN_TIME_SEC (61)
 #define S0_RUN_TIME_MIN (S0_RUN_TIME_SEC/SEC_PER_MIN)
 
 ///< How many periods S0 Sequencer should run for
@@ -121,7 +121,8 @@
 #define BIGBUFFER_DIFF_THRESHOLD_MAX_NUM_OF_FRAMES_STORED (BIGBUFFER_READ_MAX_NUM_OF_FRAMES_STORED)
 
 ///< Thresholds determined by outputting differences between consecutive frames
-#define DIFF_THRESHOLD 180000
+#define DIFF_THRESHOLD_LOWER 280000
+#define DIFF_THRESHOLD_UPPER 400000
 
 ///< Store 60 seconds of data at 1 Hz + 1 extra frame
 //#define BIGBUFFER_SELECT_MAX_NUM_OF_FRAMES_STORED (S0_RUN_TIME_SEC*S3_FREQ) + 1
@@ -146,7 +147,7 @@
 ///< Raspberry Pi 4b+ has 4 cores
 #define NUM_OF_CPU_CORES 4
 
-///< All services S0 will run on this core
+///< All services S1-S5 will run on this core
 #define RT_CORE 2
 
 ///< Structure to store thread IDs + number of S0 Sequencer periods
@@ -681,7 +682,7 @@ static void mark_frames(void) {
             syslog(LOG_INFO, "FinalProject (S2_frame_difference_threshold):  MARK_FRAMES bigbuffer_read[%d] - bigbuffer_read[%d + 1]=%u", i, i, diff);
     
             ///< If the next frame is significantly different from the current frame then mark 2 frames before as a good frame
-            if (diff > DIFF_THRESHOLD) {
+            if (diff > DIFF_THRESHOLD_LOWER) {
                 first_diff_threshold = i;
                 bigbuffer_diff_threshold[first_diff_threshold + 2] = good;
                 framecnt_next_diff++;
@@ -699,12 +700,12 @@ static void mark_frames(void) {
             ///< Calculate sum of difference between each byte of current frame and next frame
             diff = 0;
             for (j = 0; j < PHOTO_RES; j++) {
-                diff += abs((unsigned int)bigbuffer_read_ptr[i * PHOTO_RES + j] - (unsigned int)bigbuffer_read_ptr[(i + 1) * PHOTO_RES + j]);
+                diff += abs((unsigned int)bigbuffer_read_ptr[i * PHOTO_RES + j] - (unsigned int)bigbuffer_read_ptr[(i - 1) * PHOTO_RES + j]);
             }
         
             syslog(LOG_INFO, "FinalProject (S2_frame_difference_threshold):  MARK_FRAMES framecnt_diff_threshold=%d", framecnt_diff_threshold);
             syslog(LOG_INFO, "FinalProject (S2_frame_difference_threshold):  MARK_FRAMES size_buf_read[%d]=%d", i, size_buf_read[i]);
-            syslog(LOG_INFO, "FinalProject (S2_frame_difference_threshold):  MARK_FRAMES bigbuffer_read[%d] - bigbuffer_read[%d + 1]=%u", i, i, diff);
+            syslog(LOG_INFO, "FinalProject (S2_frame_difference_threshold):  MARK_FRAMES bigbuffer_read[%d] - bigbuffer_read[%d - 1]=%u", i, i, diff);
         
             ///< We have performed another frame difference calculation
             framecnt_diff_threshold++;
