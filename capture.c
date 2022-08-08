@@ -205,6 +205,7 @@ double current_realtime_last_seq = 0;
 ///< Buffer info for S1 Frame Acquisition
 unsigned char bigbuffer_read[PHOTO_RES * BIGBUFFER_READ_MAX_NUM_OF_FRAMES_STORED];
 int size_buf_read[BIGBUFFER_READ_MAX_NUM_OF_FRAMES_STORED];
+double timestamp_read[BIGBUFFER_READ_MAX_NUM_OF_FRAMES_STORED];
 int head_read = 0;
 int tail_read = 0;
 int head_read_test = 0;
@@ -234,6 +235,7 @@ int first_diff_threshold = -1;
 ///< Buffer info for S3 Frame Select
 unsigned char bigbuffer_select[PHOTO_RES * BIGBUFFER_SELECT_MAX_NUM_OF_FRAMES_STORED];
 int size_buf_select[BIGBUFFER_SELECT_MAX_NUM_OF_FRAMES_STORED];
+double timestamp_select[BIGBUFFER_SELECT_MAX_NUM_OF_FRAMES_STORED];
 int head_select = 0;
 int tail_select = 0;
 int head_select_test = 0;
@@ -258,6 +260,7 @@ int frame_selected_from_bigbuffer_select = 0;
 ///< Buffer info for S4 Frame Process
 unsigned char bigbuffer_process[PHOTO_RES * BIGBUFFER_PROCESS_MAX_NUM_OF_FRAMES_STORED];
 int size_buf_process[BIGBUFFER_PROCESS_MAX_NUM_OF_FRAMES_STORED];
+double timestamp_process[BIGBUFFER_PROCESS_MAX_NUM_OF_FRAMES_STORED];
 int head_process = 0;
 int tail_process = 0;
 int head_process_test = 0;
@@ -268,7 +271,7 @@ int framecnt_writeback = 0;
 int framecnt_writeback_first = 0;
 int framecnt_writeback_last = 0;
 
-///< Frame number selected from bigbuffer_read by S5 Frame Writeback
+///< Frame number selected from bigbuffer_process by S5 Frame Writeback
 int frame_selected_from_bigbuffer_process = 0;
 
 /*************************************************************************
@@ -361,6 +364,7 @@ static void dump_ppm(const void* p, int size, unsigned int tag, struct timespec*
 
 char pgm_header[] = "P5\n#9999999999 sec 9999999999 msec \n"HRES_STR" "VRES_STR"\n255\n";
 char pgm_dumpname[] = "frames/test0000.pgm";
+//char pgm_dumpname[] = "frames/test0000-0000.0000.pgm";
 
 static void dump_pgm(const void* p, int size, unsigned int tag, struct timespec* time)
 {
@@ -368,6 +372,7 @@ static void dump_pgm(const void* p, int size, unsigned int tag, struct timespec*
     unsigned char* pptr = (unsigned char*)p;
 
     snprintf(&pgm_dumpname[11], 9, "%04d", tag);
+    //snprintf(&pgm_dumpname[15], 1, "X");
     strncat(&pgm_dumpname[15], ".pgm", 5);
     dumpfd = open(pgm_dumpname, O_WRONLY | O_NONBLOCK | O_CREAT, 00666);
 
@@ -747,6 +752,7 @@ static void select_frames(void) {
             ///< Store the size of selected frame (in bytes) into global select buffer
             //size_buf_select[framecnt_select] = size_buf_read[frame_selected_from_bigbuffer_read];
             size_buf_select[head_select] = size_buf_read[frame_selected_from_bigbuffer_read];
+            timestamp_select[head_select] = timestamp_read[frame_selected_from_bigbuffer_read];
 
             syslog(LOG_INFO, "FinalProject (S3_frame_select):                SELECT_FRAMES framecnt_select=%d", framecnt_select);
             syslog(LOG_INFO, "FinalProject (S3_frame_select):                SELECT_FRAMES tail_read=%d, head_read=%d", tail_read, head_read);
@@ -813,6 +819,7 @@ static void process_frames(void) {
 
         ///< Process the current image
         process_image(bigbuffer_select, size_buf_select[i]);
+        timestamp_process[head_process] = timestamp_select[i];
 
         syslog(LOG_INFO, "FinalProject (S4_frame_process):               PROCESS_FRAMES framecnt_process=%d", framecnt_process);
         syslog(LOG_INFO, "FinalProject (S4_frame_process):               PROCESS_FRAMES tail_select=%d, head_select=%d", tail_select, head_select);
@@ -922,6 +929,11 @@ static void writeback_frames(void) {
     }
 }
 
+double realtime(struct timespec* tsptr)
+{
+    return ((double)(tsptr->tv_sec) + (((double)tsptr->tv_nsec) / 1000000000.0));
+}
+
 static int read_frame(void)
 {
     struct v4l2_buffer buf;
@@ -989,6 +1001,9 @@ static int read_frame(void)
         ///< Store the size of frame (in bytes) into global read buffer
         //size_buf_read[framecnt_read] = buf.bytesused;
         size_buf_read[head_read] = buf.bytesused;
+
+        ///< Store timestamp
+        timestamp_read[head_read] = realtime(&frame_time) - start_realtime;
 
         ///< Now store the frame into global read buffer
         store_buf_read(buffers[buf.index].start, buf.bytesused, framecnt_read, &frame_time);
@@ -1605,11 +1620,6 @@ double getTimeMsec(void)
 
     clock_gettime(MY_CLOCK, &event_ts);
     return ((event_ts.tv_sec) * 1000.0) + ((event_ts.tv_nsec) / 1000000.0);
-}
-
-double realtime(struct timespec* tsptr)
-{
-    return ((double)(tsptr->tv_sec) + (((double)tsptr->tv_nsec) / 1000000000.0));
 }
 
 void print_scheduler(void)
