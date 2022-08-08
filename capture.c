@@ -233,7 +233,7 @@ int framecnt_next_same = 0;
 int first_diff_threshold = -1;
 
 ///< Buffer info for S3 Frame Select
-unsigned char bigbuffer_select[PHOTO_RES * BIGBUFFER_SELECT_MAX_NUM_OF_FRAMES_STORED];
+unsigned char bigbuffer_select[PHOTO_RES/2 * BIGBUFFER_SELECT_MAX_NUM_OF_FRAMES_STORED];
 int size_buf_select[BIGBUFFER_SELECT_MAX_NUM_OF_FRAMES_STORED];
 double timestamp_select[BIGBUFFER_SELECT_MAX_NUM_OF_FRAMES_STORED];
 int head_select = 0;
@@ -258,7 +258,7 @@ int framecnt_process_last = 0;
 int frame_selected_from_bigbuffer_select = 0;
 
 ///< Buffer info for S4 Frame Process
-unsigned char bigbuffer_process[PHOTO_RES * BIGBUFFER_PROCESS_MAX_NUM_OF_FRAMES_STORED];
+unsigned char bigbuffer_process[PHOTO_RES/2 * BIGBUFFER_PROCESS_MAX_NUM_OF_FRAMES_STORED];
 int size_buf_process[BIGBUFFER_PROCESS_MAX_NUM_OF_FRAMES_STORED];
 double timestamp_process[BIGBUFFER_PROCESS_MAX_NUM_OF_FRAMES_STORED];
 int head_process = 0;
@@ -2187,6 +2187,11 @@ int main(int argc, char** argv)
     printf("Starting S0 Sequencer...\n");
     sequencePeriods = S0_PERIODS;
 
+    ///< Manual shotgun method
+    //char* shotgun;
+    //printf("Enter any key to begin...\n");
+    //scanf(shotgun);
+
     ///< Set up to signal SIGALRM if timer expires
     timer_create(MY_CLOCK, NULL, &timer_1);
     signal(SIGALRM, (void(*)()) S0_sequencer);
@@ -2196,11 +2201,6 @@ int main(int argc, char** argv)
     itime.it_interval.tv_nsec = (1.0 / S0_FREQ) * (NANOSEC_PER_SEC);
     itime.it_value.tv_sec = 0;
     itime.it_value.tv_nsec = (1.0 / S0_FREQ) * (NANOSEC_PER_SEC);
-
-    ///< Manual shotgun method
-    char* shotgun;
-    printf("Enter any key to begin...\n");
-    scanf(shotgun);
 
     timer_settime(timer_1, flags, &itime, &last_itime);
 
