@@ -2187,6 +2187,11 @@ int main(int argc, char** argv)
     itime.it_value.tv_sec = 0;
     itime.it_value.tv_nsec = (1.0 / S0_FREQ) * (NANOSEC_PER_SEC);
 
+    ///< Manual shotgun method
+    char* shotgun;
+    printf("Enter any key to begin...\n");
+    scanf(shotgun);
+
     timer_settime(timer_1, flags, &itime, &last_itime);
 
     ///< Join back all threads
