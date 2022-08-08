@@ -102,11 +102,11 @@
 #define S5_FREQ (0.25)
 
 ///< Desired time to run in s
-#define S0_RUN_TIME_SEC (61)
+#define S0_RUN_TIME_SEC (60)
 #define S0_RUN_TIME_MIN (S0_RUN_TIME_SEC/SEC_PER_MIN)
 
 ///< How many periods S0 Sequencer should run for
-#define S0_PERIODS (S0_FREQ*S0_RUN_TIME_SEC)
+#define S0_PERIODS (S0_FREQ*(S0_RUN_TIME_SEC + 1))
 
 ///< Resolution of pictures captured by S1 Frame Acquisition
 #define PHOTO_RES (1280*960)
@@ -115,29 +115,35 @@
 #define NUM_FRAMES_INITIALLY_SKIPPED ((2*S1_FREQ)/5)
 
 ///< Store 60 seconds of data at 20 Hz
-#define BIGBUFFER_READ_MAX_NUM_OF_FRAMES_STORED (S0_RUN_TIME_SEC*S1_FREQ)
+#define BIGBUFFER_READ_MAX_NUM_OF_FRAMES_STORED ((S0_RUN_TIME_SEC + 1)*S1_FREQ)
+#define BIGBUFFER_READ_60_SEC_OF_FRAMES ((unsigned int)((60 + 1)*S1_FREQ))
+#define BIGBUFFER_READ_30_SEC_OF_FRAMES ((unsigned int)((30 + 1)*S1_FREQ))
 
 ///< Same size as bigbuffer_read
 #define BIGBUFFER_DIFF_THRESHOLD_MAX_NUM_OF_FRAMES_STORED (BIGBUFFER_READ_MAX_NUM_OF_FRAMES_STORED)
+#define BIGBUFFER_DIFF_THRESHOLD_60_SEC_OF_FRAMES ((unsigned int)(BIGBUFFER_READ_60_SEC_OF_FRAMES))
+#define BIGBUFFER_DIFF_THRESHOLD_30_SEC_OF_FRAMES ((unsigned int)(BIGBUFFER_READ_30_SEC_OF_FRAMES))
 
 ///< Thresholds determined by outputting differences between consecutive frames
 #define DIFF_THRESHOLD_LOWER 280000
 #define DIFF_THRESHOLD_UPPER 400000
 
 ///< Store 60 seconds of data at 1 Hz + 1 extra frame
-//#define BIGBUFFER_SELECT_MAX_NUM_OF_FRAMES_STORED (S0_RUN_TIME_SEC*S3_FREQ) + 1
-#define BIGBUFFER_SELECT_MAX_NUM_OF_FRAMES_STORED ((S0_RUN_TIME_SEC*S2_FREQ) + 1)
+#define BIGBUFFER_SELECT_MAX_NUM_OF_FRAMES_STORED (((S0_RUN_TIME_SEC + 1)*S2_FREQ))
+#define BIGBUFFER_SELECT_60_SEC_OF_FRAMES ((unsigned int)((60 + 1)*S3_FREQ))
+#define BIGBUFFER_SELECT_30_SEC_OF_FRAMES ((unsigned int)((30 + 1)*S3_FREQ))
 
 ///< Store 60 seconds of data at 1 Hz + 1 extra frame
-//#define BIGBUFFER_SELECT_MAX_NUM_OF_FRAMES_STORED (S0_RUN_TIME_SEC*S3_FREQ) + 1
-#define BIGBUFFER_PROCESS_MAX_NUM_OF_FRAMES_STORED ((S0_RUN_TIME_SEC*S2_FREQ) + 1)
+#define BIGBUFFER_PROCESS_MAX_NUM_OF_FRAMES_STORED (((S0_RUN_TIME_SEC + 1)*S2_FREQ))
+#define BIGBUFFER_PROCESS_60_SEC_OF_FRAMES ((unsigned int)((60 + 1)*S4_FREQ))
+#define BIGBUFFER_PROCESS_30_SEC_OF_FRAMES ((unsigned int)((30 + 1)*S4_FREQ))
 
 ///< Number of frames expected at the end of the test
-///< Example (1) - Running for 1800 sec for 1 Hz synchronome will be (S0_RUN_TIME_SEC)*(S3_FREQ) + Initial Frames = (1800 sec)*(1 Hz) + 9 Initial Frames = 1809 frames
+///< Example (1) - Running for 1800 sec for 1 Hz synchronome will be (S0_RUN_TIME_SEC + 1)*(S3_FREQ) + Initial Frames = (1800 sec)*(1 Hz) + 9 Initial Frames = 1809 frames
 ///<               Thus, for 1800 sec at 1 Hz selection this would be set to 1809
-///< Example (2) - Running for 180 sec for 10 Hz synchronome will be (S0_RUN_TIME_SEC)*(S3_FREQ) + Initial Frames = (180 sec)*(10 Hz) + 9 Initial Frames = 1809 frames
+///< Example (2) - Running for 180 sec for 10 Hz synchronome will be (S0_RUN_TIME_SEC + 1)*(S3_FREQ) + Initial Frames = (180 sec)*(10 Hz) + 9 Initial Frames = 1809 frames
 ///<               Thus, for 180 sec at 10 Hz selection this would be set to 1809
-#define FRAME_COUNT ((S0_RUN_TIME_SEC)*(S3_FREQ) + 9)
+#define FRAME_COUNT ((S0_RUN_TIME_SEC + 1)*(S3_FREQ) + 9)
 
 ///< Size of buffer to hold tail syslog trace command at the end
 ///< Example (1) - tail -216000 /var/log/syslog | grep -n FinalProject > ./syslog_trace_30min.txt
@@ -198,7 +204,7 @@ double current_realtime_seq = 0;
 double current_realtime_last_seq = 0;
 
 ///< Buffer info for S1 Frame Acquisition
-unsigned char bigbuffer_read[PHOTO_RES*BIGBUFFER_READ_MAX_NUM_OF_FRAMES_STORED];
+unsigned char bigbuffer_read[PHOTO_RES * BIGBUFFER_READ_MAX_NUM_OF_FRAMES_STORED];
 int size_buf_read[BIGBUFFER_READ_MAX_NUM_OF_FRAMES_STORED];
 int head_read = 0;
 int tail_read = 0;
@@ -208,7 +214,7 @@ int framecnt_read = (-(NUM_FRAMES_INITIALLY_SKIPPED));
 
 ///< Buffer info for S2 Frame Difference Threshold
 //enum frame_quality {untouched, next_frame_is_diff, next_frame_is_same};
-enum frame_quality {untouched, good, bad};
+enum frame_quality { untouched, good, bad };
 enum frame_quality bigbuffer_diff_threshold[BIGBUFFER_DIFF_THRESHOLD_MAX_NUM_OF_FRAMES_STORED];
 int head_diff_threshold = 0;
 int tail_diff_threshold = 0;
@@ -223,7 +229,7 @@ int framecnt_next_same = 0;
 int first_diff_threshold = -1;
 
 ///< Buffer info for S3 Frame Select
-unsigned char bigbuffer_select[PHOTO_RES*BIGBUFFER_SELECT_MAX_NUM_OF_FRAMES_STORED];
+unsigned char bigbuffer_select[PHOTO_RES * BIGBUFFER_SELECT_MAX_NUM_OF_FRAMES_STORED];
 int size_buf_select[BIGBUFFER_SELECT_MAX_NUM_OF_FRAMES_STORED];
 int head_select = 0;
 int tail_select = 0;
@@ -245,7 +251,7 @@ int framecnt_process_last = 0;
 int frame_selected_from_bigbuffer_select = 0;
 
 ///< Buffer info for S4 Frame Process
-unsigned char bigbuffer_process[PHOTO_RES*BIGBUFFER_PROCESS_MAX_NUM_OF_FRAMES_STORED];
+unsigned char bigbuffer_process[PHOTO_RES * BIGBUFFER_PROCESS_MAX_NUM_OF_FRAMES_STORED];
 int size_buf_process[BIGBUFFER_PROCESS_MAX_NUM_OF_FRAMES_STORED];
 int head_process = 0;
 int tail_process = 0;
@@ -368,7 +374,7 @@ static void dump_pgm(const void* p, int size, unsigned int tag, struct timespec*
 
     do
     {
-        written = write(dumpfd, (const void*)(&(pptr[size*framecnt_writeback])), size);
+        written = write(dumpfd, (const void*)(&(pptr[size * framecnt_writeback])), size);
         total += written;
     } while (total < size);
 
@@ -385,7 +391,7 @@ static void store_buf_read(const void* p, int size, unsigned int tag, struct tim
         unsigned char* pptr = (unsigned char*)p;
 
         for (i = 0; i < size; i = i + 1) {
-            bigbuffer_read[(PHOTO_RES*framecnt_read) + i] = pptr[i];
+            bigbuffer_read[(PHOTO_RES * framecnt_read) + i] = pptr[i];
             //bigbuffer_read[(PHOTO_RES*head_read) + i] = pptr[i];
         }
     }
@@ -398,7 +404,8 @@ static void store_buf_select(const void* p, int size, unsigned int tag, struct t
         unsigned char* pptr = (unsigned char*)p;
 
         for (i = 0; i < size; i = i + 1) {
-            bigbuffer_select[(PHOTO_RES*framecnt_select) + i] = pptr[(PHOTO_RES*frame_selected_from_bigbuffer_read) + i];
+            bigbuffer_select[(PHOTO_RES * framecnt_select) + i] = pptr[(PHOTO_RES * frame_selected_from_bigbuffer_read) + i];
+            //bigbuffer_select[(PHOTO_RES*head_select) + i] = pptr[(PHOTO_RES*frame_selected_from_bigbuffer_read) + i];
         }
     }
 }
@@ -410,7 +417,8 @@ static void store_buf_process(const void* p, int size, unsigned int tag, struct 
         unsigned char* pptr = (unsigned char*)p;
         syslog(LOG_INFO, "FinalProject (S4_frame_process):               STORE_BUF_PROCESS size=%d, framecnt_process=%d, frame_selected_from_bigbuffer_select=%d", size, size_buf_process[frame_selected_from_bigbuffer_select], framecnt_process, frame_selected_from_bigbuffer_select);
         for (i = 0; i < size; i = i + 1) {
-            bigbuffer_process[(size*framecnt_process) + i] = pptr[i];
+            bigbuffer_process[(size * framecnt_process) + i] = pptr[i];
+            //bigbuffer_process[(size*head_process) + i] = pptr[i];
         }
     }
 }
@@ -534,8 +542,8 @@ static void process_image(const void* p, int size)
         for (i = 0, newi = 0; i < size; i = i + 4, newi = newi + 2)
         {
             // Y1=first byte and Y2=third byte
-            bigbuffer[newi] = pptr[(PHOTO_RES*frame_selected_from_bigbuffer_select) + i];
-            bigbuffer[newi + 1] = pptr[(PHOTO_RES*frame_selected_from_bigbuffer_select) + i + 2];
+            bigbuffer[newi] = pptr[(PHOTO_RES * frame_selected_from_bigbuffer_select) + i];
+            bigbuffer[newi + 1] = pptr[(PHOTO_RES * frame_selected_from_bigbuffer_select) + i + 2];
         }
 
         if (framecnt_process > -1)
@@ -589,19 +597,19 @@ static void mark_frames(void) {
     if (first_diff_threshold < 0) {
         ///< Check if current frame is different from next frame
         for (i = framecnt_diff_threshold_first; i < framecnt_diff_threshold_last; i++) {
-    
+
             ///< Calculate sum of difference between each byte of current frame and next frame
             diff = 0;
             for (j = 0; j < PHOTO_RES; j++) {
                 diff += abs((unsigned int)bigbuffer_read_ptr[i * PHOTO_RES + j] - (unsigned int)bigbuffer_read_ptr[(i + 1) * PHOTO_RES + j]);
             }
-    
+
             syslog(LOG_INFO, "FinalProject (S2_frame_difference_threshold):  MARK_FRAMES framecnt_diff_threshold=%d", framecnt_diff_threshold);
             syslog(LOG_INFO, "FinalProject (S2_frame_difference_threshold):  MARK_FRAMES tail_read=%d, head_read=%d", tail_read, head_read);
             syslog(LOG_INFO, "FinalProject (S2_frame_difference_threshold):  MARK_FRAMES tail_diff_threshold=%d, head_diff_threshold=%d", tail_diff_threshold, head_diff_threshold);
             syslog(LOG_INFO, "FinalProject (S2_frame_difference_threshold):  MARK_FRAMES size_buf_read[%d]=%d", i, size_buf_read[i]);
             syslog(LOG_INFO, "FinalProject (S2_frame_difference_threshold):  MARK_FRAMES bigbuffer_read[%d] - bigbuffer_read[%d + 1]=%u", i, i, diff);
-    
+
             ///< If the next frame is significantly different from the current frame then mark 2 frames before as a good frame
             if (diff > DIFF_THRESHOLD_LOWER) {
                 first_diff_threshold = i;
@@ -609,33 +617,37 @@ static void mark_frames(void) {
                 framecnt_next_diff++;
                 framecnt_next_untouched--;
             }
-    
+
             ///< We have performed another frame difference calculation
             framecnt_diff_threshold++;
             head_diff_threshold++;
-            head_diff_threshold = head_diff_threshold % BIGBUFFER_DIFF_THRESHOLD_MAX_NUM_OF_FRAMES_STORED;
+            //head_diff_threshold = head_diff_threshold % BIGBUFFER_DIFF_THRESHOLD_MAX_NUM_OF_FRAMES_STORED;
+            //head_diff_threshold = head_diff_threshold % BIGBUFFER_DIFF_THRESHOLD_60_SEC_OF_FRAMES;
+            head_diff_threshold = head_diff_threshold % BIGBUFFER_DIFF_THRESHOLD_30_SEC_OF_FRAMES;
         }
     }
     else {
         ///< Check if current frame is different from next frame
         for (i = framecnt_diff_threshold_first; i < framecnt_diff_threshold_last; i++) {
-        
+
             ///< Calculate sum of difference between each byte of current frame and next frame
             diff = 0;
             for (j = 0; j < PHOTO_RES; j++) {
                 diff += abs((unsigned int)bigbuffer_read_ptr[i * PHOTO_RES + j] - (unsigned int)bigbuffer_read_ptr[(i - 1) * PHOTO_RES + j]);
             }
-        
+
             syslog(LOG_INFO, "FinalProject (S2_frame_difference_threshold):  MARK_FRAMES framecnt_diff_threshold=%d", framecnt_diff_threshold);
             syslog(LOG_INFO, "FinalProject (S2_frame_difference_threshold):  MARK_FRAMES tail_read=%d, head_read=%d", tail_read, head_read);
             syslog(LOG_INFO, "FinalProject (S2_frame_difference_threshold):  MARK_FRAMES tail_diff_threshold=%d, head_diff_threshold=%d", tail_diff_threshold, head_diff_threshold);
             syslog(LOG_INFO, "FinalProject (S2_frame_difference_threshold):  MARK_FRAMES size_buf_read[%d]=%d", i, size_buf_read[i]);
             syslog(LOG_INFO, "FinalProject (S2_frame_difference_threshold):  MARK_FRAMES bigbuffer_read[%d] - bigbuffer_read[%d - 1]=%u", i, i, diff);
-        
+
             ///< We have performed another frame difference calculation
             framecnt_diff_threshold++;
             head_diff_threshold++;
-            head_diff_threshold = head_diff_threshold % BIGBUFFER_DIFF_THRESHOLD_MAX_NUM_OF_FRAMES_STORED;
+            //head_diff_threshold = head_diff_threshold % BIGBUFFER_DIFF_THRESHOLD_MAX_NUM_OF_FRAMES_STORED;
+            //head_diff_threshold = head_diff_threshold % BIGBUFFER_DIFF_THRESHOLD_60_SEC_OF_FRAMES;
+            head_diff_threshold = head_diff_threshold % BIGBUFFER_DIFF_THRESHOLD_30_SEC_OF_FRAMES;
         }
 
         ///< Mark next good frame with shotgun method
@@ -647,7 +659,7 @@ static void mark_frames(void) {
                 framecnt_next_diff++;
                 framecnt_next_untouched--;
             }
-            else if ((first_diff_threshold % 5) < (((framecnt_diff_threshold_first + framecnt_diff_threshold_last)/2) % 5)) {
+            else if ((first_diff_threshold % 5) < (((framecnt_diff_threshold_first + framecnt_diff_threshold_last) / 2) % 5)) {
                 syslog(LOG_INFO, "FinalProject (S2_frame_difference_threshold):  MARK_FRAMES add");
                 first_diff_threshold = first_diff_threshold + 2 * (S1_FREQ / S2_FREQ);
 
@@ -704,10 +716,10 @@ static void select_frames(void) {
             frame_selected_from_bigbuffer_read = i;
 
             clock_gettime(MY_CLOCK, &frame_time);
-    
+
             ///< Store the size of selected frame (in bytes) into global select buffer
             size_buf_select[framecnt_select] = size_buf_read[frame_selected_from_bigbuffer_read];
-    
+
             syslog(LOG_INFO, "FinalProject (S3_frame_select):                SELECT_FRAMES framecnt_select=%d", framecnt_select);
             syslog(LOG_INFO, "FinalProject (S3_frame_select):                SELECT_FRAMES tail_read=%d, head_read=%d", tail_read, head_read);
             syslog(LOG_INFO, "FinalProject (S3_frame_select):                SELECT_FRAMES tail_diff_threshold=%d, head_diff_threshold=%d", tail_diff_threshold, head_diff_threshold);
@@ -718,15 +730,21 @@ static void select_frames(void) {
 
             ///< Now store the frame into global select buffer
             store_buf_select(bigbuffer_read, size_buf_read[frame_selected_from_bigbuffer_read], framecnt_select, &frame_time);
-    
+
             ///< We have stored another selected frame
             framecnt_select++;
             tail_read++;
-            tail_read = tail_read % BIGBUFFER_READ_MAX_NUM_OF_FRAMES_STORED;
+            //tail_read = tail_read % BIGBUFFER_READ_MAX_NUM_OF_FRAMES_STORED;
+            //tail_read = tail_read % BIGBUFFER_READ_60_SEC_OF_FRAMES;
+            tail_read = tail_read % BIGBUFFER_READ_30_SEC_OF_FRAMES;
             tail_diff_threshold++;
-            tail_diff_threshold = tail_diff_threshold % BIGBUFFER_DIFF_THRESHOLD_MAX_NUM_OF_FRAMES_STORED;
+            //tail_diff_threshold = tail_diff_threshold % BIGBUFFER_DIFF_THRESHOLD_MAX_NUM_OF_FRAMES_STORED;
+            //tail_diff_threshold = tail_diff_threshold % BIGBUFFER_DIFF_THRESHOLD_60_SEC_OF_FRAMES;
+            tail_diff_threshold = tail_diff_threshold % BIGBUFFER_DIFF_THRESHOLD_30_SEC_OF_FRAMES;
             head_select++;
-            head_select = head_select % BIGBUFFER_SELECT_MAX_NUM_OF_FRAMES_STORED;
+            //head_select = head_select % BIGBUFFER_SELECT_MAX_NUM_OF_FRAMES_STORED;
+            //head_select = head_select % BIGBUFFER_SELECT_60_SEC_OF_FRAMES;
+            head_select = head_select % BIGBUFFER_SELECT_30_SEC_OF_FRAMES;
             //syslog(LOG_INFO, "FinalProject (S3_frame_select):                SELECT_FRAMESX framecnt_select=%d", framecnt_select);
             //syslog(LOG_INFO, "FinalProject (S3_frame_select):                SELECT_FRAMESX tail_select=%d, head_select=%d", tail_select, head_select);
         }
@@ -763,9 +781,13 @@ static void process_frames(void) {
         ///< We have stored another processed frame
         framecnt_process++;
         tail_select++;
-        tail_select = tail_select % BIGBUFFER_SELECT_MAX_NUM_OF_FRAMES_STORED;
+        //tail_select = tail_select % BIGBUFFER_SELECT_MAX_NUM_OF_FRAMES_STORED;
+        //tail_select = tail_select % BIGBUFFER_SELECT_60_SEC_OF_FRAMES;
+        tail_select = tail_select % BIGBUFFER_SELECT_30_SEC_OF_FRAMES;
         head_process++;
-        head_process = head_process % BIGBUFFER_PROCESS_MAX_NUM_OF_FRAMES_STORED;
+        //head_process = head_process % BIGBUFFER_PROCESS_MAX_NUM_OF_FRAMES_STORED;
+        //head_process = head_process % BIGBUFFER_PROCESS_60_SEC_OF_FRAMES;
+        head_process = head_process % BIGBUFFER_PROCESS_30_SEC_OF_FRAMES;
     }
 }
 
@@ -785,7 +807,7 @@ static void writeback_frames(void) {
         syslog(LOG_INFO, "FinalProject (S5_frame_writeback):             WRITEBACK_FRAMES framecnt_writeback=%d", framecnt_writeback);
         syslog(LOG_INFO, "FinalProject (S5_frame_writeback):             WRITEBACK_FRAMES tail_process=%d, head_process=%d", tail_process, head_process);
         syslog(LOG_INFO, "FinalProject (S5_frame_writeback):             WRITEBACK_FRAMES size_buf_process[%d]=%d", i, size_buf_process[i]);
-        
+
         ///< Select this frame's index in bigbuffer_process for the call to dump it into FLASH
         frame_selected_from_bigbuffer_process = i;
 
@@ -798,7 +820,9 @@ static void writeback_frames(void) {
             ///< We have written back another frame
             framecnt_writeback++;
             tail_process++;
-            tail_process = tail_process % BIGBUFFER_PROCESS_MAX_NUM_OF_FRAMES_STORED;
+            //tail_process = tail_process % BIGBUFFER_PROCESS_MAX_NUM_OF_FRAMES_STORED;
+            //tail_process = tail_process % BIGBUFFER_PROCESS_60_SEC_OF_FRAMES;
+            tail_process = tail_process % BIGBUFFER_PROCESS_30_SEC_OF_FRAMES;
         }
         else if (fmt.fmt.pix.pixelformat == V4L2_PIX_FMT_YUYV) {
 #if defined(COLOR_CONVERT_RGB)
@@ -808,7 +832,9 @@ static void writeback_frames(void) {
             ///< We have written back another frame
             framecnt_writeback++;
             tail_process++;
-            tail_process = tail_process % BIGBUFFER_PROCESS_MAX_NUM_OF_FRAMES_STORED;
+            //tail_process = tail_process % BIGBUFFER_PROCESS_MAX_NUM_OF_FRAMES_STORED;
+            //tail_process = tail_process % BIGBUFFER_PROCESS_60_SEC_OF_FRAMES;
+            tail_process = tail_process % BIGBUFFER_PROCESS_30_SEC_OF_FRAMES;
 #else
             ///< Writeback the current image
             dump_pgm(bigbuffer_process, size_buf_process[i], i, &frame_time);
@@ -816,7 +842,9 @@ static void writeback_frames(void) {
             ///< We have written back another frame
             framecnt_writeback++;
             tail_process++;
-            tail_process = tail_process % BIGBUFFER_PROCESS_MAX_NUM_OF_FRAMES_STORED;
+            //tail_process = tail_process % BIGBUFFER_PROCESS_MAX_NUM_OF_FRAMES_STORED;
+            //tail_process = tail_process % BIGBUFFER_PROCESS_60_SEC_OF_FRAMES;
+            tail_process = tail_process % BIGBUFFER_PROCESS_30_SEC_OF_FRAMES;
 #endif
         }
         else if (fmt.fmt.pix.pixelformat == V4L2_PIX_FMT_RGB24) {
@@ -826,7 +854,9 @@ static void writeback_frames(void) {
             ///< We have written back another frame
             framecnt_writeback++;
             tail_process++;
-            tail_process = tail_process % BIGBUFFER_PROCESS_MAX_NUM_OF_FRAMES_STORED;
+            //tail_process = tail_process % BIGBUFFER_PROCESS_MAX_NUM_OF_FRAMES_STORED;
+            //tail_process = tail_process % BIGBUFFER_PROCESS_60_SEC_OF_FRAMES;
+            tail_process = tail_process % BIGBUFFER_PROCESS_30_SEC_OF_FRAMES;
         }
         else {
             syslog(LOG_INFO, "FinalProject (S5_frame_writeback):             WRITEBACK_FRAMES cannot writeback unknown dump format for bigbuffer_process[%d]", i);
@@ -912,7 +942,9 @@ static int read_frame(void)
         framecnt_read++;
         if (framecnt_read > 0) {
             head_read++;
-            head_read = head_read % BIGBUFFER_READ_MAX_NUM_OF_FRAMES_STORED;
+            //head_read = head_read % BIGBUFFER_READ_MAX_NUM_OF_FRAMES_STORED;
+            //head_read = head_read % BIGBUFFER_READ_60_SEC_OF_FRAMES;
+            head_read = head_read % BIGBUFFER_READ_30_SEC_OF_FRAMES;
         }
 
         ///< The frame we stored has not been touched by S2_frame_difference_threshold yet
@@ -993,7 +1025,7 @@ static void mainloop(void)
 
             ///< Don't let select block for more than S1 Frame Acquisition's period
             tv.tv_sec = 0;
-            tv.tv_usec = (1.0/S1_FREQ)*(MICROSEC_PER_SEC);
+            tv.tv_usec = (1.0 / S1_FREQ) * (MICROSEC_PER_SEC);
 
             r = select(fd + 1, &fds, NULL, NULL, &tv);
 
@@ -1560,31 +1592,31 @@ void* S0_sequencer(void* threadp)
 
     clock_gettime(MY_CLOCK, &current_time_val);
     current_realtime_seq = realtime(&current_time_val);
-    
+
     syslog(LOG_CRIT, "FinalProject (S0_sequencer):                   S0_SEQUENCER Sequencer on core %d for cycle %llu @ sec=%6.9f, dt=%lf", sched_getcpu(), seqCnt, current_realtime_seq - start_realtime, current_realtime_seq - current_realtime_last_seq);
 
     ///< Post semaphore for S1 Frame Acquisition at a derivative frequency of S0 Sequencer
-    if ((seqCnt % (int)(S0_FREQ/S1_FREQ)) == 0) {
+    if ((seqCnt % (int)(S0_FREQ / S1_FREQ)) == 0) {
         sem_post(&sem[0]);
     }
 
     ///< Post semaphore for S2 Frame Difference Threshold at a derivative frequency of S0 Sequencer
-    if ((seqCnt % (int)(S0_FREQ/S2_FREQ)) == 0) {
+    if ((seqCnt % (int)(S0_FREQ / S2_FREQ)) == 0) {
         sem_post(&sem[1]);
     }
 
     ///< Post semaphore for S3 Frame Selection at a derivative frequency of S0 Sequencer
-    if ((seqCnt % (int)(S0_FREQ/S3_FREQ)) == 0) {
+    if ((seqCnt % (int)(S0_FREQ / S3_FREQ)) == 0) {
         sem_post(&sem[2]);
     }
 
     ///< Post semaphore for S4 Frame Process at a derivative frequency of S0 Sequencer
-    if ((seqCnt % (int)(S0_FREQ/S4_FREQ)) == 0) {
+    if ((seqCnt % (int)(S0_FREQ / S4_FREQ)) == 0) {
         sem_post(&sem[3]);
     }
 
     ///< Post semaphore for S5 Frame Write-Back at a derivative frequency of S0 Sequencer
-    if ((seqCnt % (int)(S0_FREQ/S5_FREQ)) == 0) {
+    if ((seqCnt % (int)(S0_FREQ / S5_FREQ)) == 0) {
         sem_post(&sem[4]);
     }
 
@@ -1972,7 +2004,7 @@ int main(int argc, char** argv)
         }
 
         ///< Set scheduling priority for this thread i (higher priority services for lower values of i
-        rt_param[i].sched_priority = rt_max_prio - i;
+        rt_param[i].sched_priority = rt_max_prio - (i + 1);
         rc = pthread_attr_setschedparam(&rt_sched_attr[i], &rt_param[i]);
         if (rc < EXIT_SUCCESS) {
             printf("Failed to set scheduling priority for rt_sched_attr[%d] to %d/%d\n", i, rt_param[i].sched_priority, rt_max_prio);
@@ -1993,9 +2025,9 @@ int main(int argc, char** argv)
 
     ///< Create S1 Frame Acquisition thread but perform no action because semaphore is not given
     rc = pthread_create(&threads[S1],                    // pointer to thread descriptor
-                        &rt_sched_attr[S1],              // use specific attributes
-                        S1_frame_acquisition,           // thread function entry point
-                        (void*)&(threadParams[S1])       // parameters to pass in
+        &rt_sched_attr[S1],              // use specific attributes
+        S1_frame_acquisition,           // thread function entry point
+        (void*)&(threadParams[S1])       // parameters to pass in
     );
     if (rc < EXIT_SUCCESS) {
         printf("Failed to create thread[%d] tied to S1 Frame Acquisition\n", S1);
@@ -2007,9 +2039,9 @@ int main(int argc, char** argv)
 
     ///< Create S2 Frame Difference Threshold thread but perform no action because semaphore is not given
     rc = pthread_create(&threads[S2],                    // pointer to thread descriptor
-                        &rt_sched_attr[S2],              // use specific attributes
-                        S2_frame_difference_threshold,  // thread function entry point
-                        (void*)&(threadParams[S2])       // parameters to pass in
+        &rt_sched_attr[S2],              // use specific attributes
+        S2_frame_difference_threshold,  // thread function entry point
+        (void*)&(threadParams[S2])       // parameters to pass in
     );
     if (rc < EXIT_SUCCESS) {
         printf("Failed to create thread[%d] tied to S2 Frame Difference Threshold\n", S2);
@@ -2021,9 +2053,9 @@ int main(int argc, char** argv)
 
     ///< Create S3 Frame Select thread but perform no action because semaphore is not given
     rc = pthread_create(&threads[S3],                    // pointer to thread descriptor
-                        &rt_sched_attr[S3],              // use specific attributes
-                        S3_frame_select,                // thread function entry point
-                        (void*)&(threadParams[S3])       // parameters to pass in
+        &rt_sched_attr[S3],              // use specific attributes
+        S3_frame_select,                // thread function entry point
+        (void*)&(threadParams[S3])       // parameters to pass in
     );
     if (rc < EXIT_SUCCESS) {
         printf("Failed to create thread[%d] tied to S3 Frame Select\n", S3);
@@ -2035,9 +2067,9 @@ int main(int argc, char** argv)
 
     ///< Create S4 Frame Process thread but perform no action because semaphore is not given
     rc = pthread_create(&threads[S4],                    // pointer to thread descriptor
-                        &rt_sched_attr[S4],              // use specific attributes
-                        S4_frame_process,               // thread function entry point
-                        (void*)&(threadParams[S4])       // parameters to pass in
+        &rt_sched_attr[S4],              // use specific attributes
+        S4_frame_process,               // thread function entry point
+        (void*)&(threadParams[S4])       // parameters to pass in
     );
     if (rc < EXIT_SUCCESS) {
         printf("Failed to create thread[%d] tied to S4 Frame Process\n", S4);
@@ -2049,9 +2081,9 @@ int main(int argc, char** argv)
 
     ///< create frame write-back thread but perform no action because semaphore is not given
     rc = pthread_create(&threads[S5],                    // pointer to thread descriptor
-                        &rt_sched_attr[S5],              // use specific attributes
-                        S5_frame_writeback,             // thread function entry point
-                        (void*)&(threadParams[S5])       // parameters to pass in
+        &rt_sched_attr[S5],              // use specific attributes
+        S5_frame_writeback,             // thread function entry point
+        (void*)&(threadParams[S5])       // parameters to pass in
     );
     if (rc < EXIT_SUCCESS) {
         printf("Failed to create thread[%d] tied to S5 Frame Write-Back\n", S5);
@@ -2071,16 +2103,16 @@ int main(int argc, char** argv)
 
     ///< Arm the interval timer
     itime.it_interval.tv_sec = 0;
-    itime.it_interval.tv_nsec = (1.0/S0_FREQ)*(NANOSEC_PER_SEC);
+    itime.it_interval.tv_nsec = (1.0 / S0_FREQ) * (NANOSEC_PER_SEC);
     itime.it_value.tv_sec = 0;
-    itime.it_value.tv_nsec = (1.0/S0_FREQ)*(NANOSEC_PER_SEC);
+    itime.it_value.tv_nsec = (1.0 / S0_FREQ) * (NANOSEC_PER_SEC);
 
     timer_settime(timer_1, flags, &itime, &last_itime);
 
     ///< Join back all threads
     for (i = 0; i < NUM_OF_THREADS; i++) {
         rc = pthread_join(threads[i], NULL);
-        
+
         if (rc < EXIT_SUCCESS) {
             perror("main pthread_join");
         }
