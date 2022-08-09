@@ -123,7 +123,7 @@
 #define BIGBUFFER_DIFF_THRESHOLD_TEST_SEC_OF_FRAMES ((unsigned int)(BIGBUFFER_READ_TEST_SEC_OF_FRAMES))
 
 ///< Thresholds determined by outputting differences between consecutive frames
-#define DIFF_THRESHOLD_LOWER 280000
+#define DIFF_THRESHOLD_LOWER 200000
 #define DIFF_THRESHOLD_UPPER 400000
 
 ///< Store 60 seconds of data at 1 Hz + 1 extra frame

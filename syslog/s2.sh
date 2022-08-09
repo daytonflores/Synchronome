@@ -1,1 +1,1 @@
-clear; tail -99999 /var/log/syslog | grep -n -e "S2_frame_difference_threshold"
+clear; tail -99999 /var/log/syslog | grep -n -e -a "S2_frame_difference_threshold"

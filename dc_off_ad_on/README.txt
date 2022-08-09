@@ -1,2 +1,0 @@
-DRIFT_CONTROL undefined
-ABS_DELAY defined

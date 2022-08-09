@@ -1,1 +1,1 @@
-clear; tail -99999 /var/log/syslog | grep -n -e "FinalProject"
+clear; tail -99999 /var/log/syslog | grep -n -e -a "FinalProject"

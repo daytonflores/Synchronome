@@ -1,1 +1,1 @@
-clear; tail -99999 /var/log/syslog | grep -n -e "S0_sequencer"
+clear; tail -99999 /var/log/syslog | grep -n -e -a "S0_sequencer"
