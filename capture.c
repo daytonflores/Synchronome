@@ -68,8 +68,8 @@
 ///< Return codes
 #define TRUE (1)
 #define FALSE (0)
-#define EXIT_SUCCESS (0)
-#define EXIT_FAILURE (1)
+//#define EXIT_SUCCESS (0)
+//#define EXIT_FAILURE (1)
 #define EXIT_FAILURE_N (-1)
 
 ///< Conversion values
@@ -140,11 +140,6 @@
 ///< Example (2) - Running for 180 sec for 10 Hz synchronome will be (S0_RUN_TIME_SEC + 1)*(S3_FREQ) + Initial Frames = (180 sec)*(10 Hz) + 9 Initial Frames = 1809 frames
 ///<               Thus, for 180 sec at 10 Hz selection this would be set to 1809
 #define FRAME_COUNT ((S0_RUN_TIME_SEC + 1)*(S3_FREQ) + 9)
-
-///< Size of buffer to hold tail syslog trace command at the end
-///< Example (1) - tail -216000 /var/log/syslog | grep -n FinalProject > ./syslog_trace_30min.txt
-///<               The above command is 78 characters + 1 character for NULL
-#define SYS_BUF_SIZE (78 + 1)
 
 ///< Raspberry Pi 4b+ has 4 cores
 #define NUM_OF_CPU_CORES 4
@@ -313,7 +308,7 @@ unsigned char bigbuffer[PHOTO_RES];
 static void errno_exit(const char* s)
 {
     fprintf(stderr, "%s error %d, %s\n", s, errno, strerror(errno));
-
+    perror("errno_exit");
     exit(EXIT_FAILURE);
 }
 
@@ -335,7 +330,7 @@ char ppm_dumpname[] = "frames/test0000.ppm";
 
 static void dump_ppm(const void* p, int size, unsigned int tag, struct timespec* time)
 {
-    int written, i, total, dumpfd;
+    int written, total, dumpfd;
 
     snprintf(&ppm_dumpname[11], 9, "%04d", tag);
     strncat(&ppm_dumpname[15], ".ppm", 5);
@@ -368,7 +363,7 @@ char pgm_dumpname[] = "frames/test0000.pgm";
 
 static void dump_pgm(const void* p, int size, unsigned int tag, struct timespec* time)
 {
-    int written, i, total, dumpfd;
+    int written, total, dumpfd;
     unsigned char* pptr = (unsigned char*)p;
 
     snprintf(&pgm_dumpname[11], 9, "%04d", tag);
@@ -427,7 +422,7 @@ static void store_buf_process(const void* p, int size, unsigned int tag, struct 
     if (framecnt_process >= 0) {
         int i;
         unsigned char* pptr = (unsigned char*)p;
-        syslog(LOG_INFO, "FinalProject (S4_frame_process):               STORE_BUF_PROCESS size=%d, framecnt_process=%d, frame_selected_from_bigbuffer_select=%d", size, size_buf_process[frame_selected_from_bigbuffer_select], framecnt_process, frame_selected_from_bigbuffer_select);
+        syslog(LOG_INFO, "FinalProject (S4_frame_process):               STORE_BUF_PROCESS size=%d, framecnt_process=%d, frame_selected_from_bigbuffer_select=%d", size, framecnt_process, frame_selected_from_bigbuffer_select);
         for (i = 0; i < size; i = i + 1) {
             //bigbuffer_process[(size * framecnt_process) + i] = pptr[i];
             bigbuffer_process[(size * head_process) + i] = pptr[i];
@@ -1079,7 +1074,7 @@ static void mainloop(void)
 {
     unsigned int count;
     //struct timespec read_delay;
-    struct timespec time_error;
+    //struct timespec time_error;
 
     // Replace this with a sequencer DELAY
     //
@@ -1116,8 +1111,8 @@ static void mainloop(void)
 
             if (0 == r)
             {
-                syslog(LOG_ERR, "FinalProject (S1_frame_acquisition):           MAINLOOP select timeout\n");
-
+                //syslog(LOG_ERR, "FinalProject (S1_frame_acquisition):           MAINLOOP select timeout\n");
+                perror("FinalProject (S1_frame_acquisition):           MAINLOOP select timeout");
                 exit(EXIT_FAILURE);
             }
 
@@ -1238,7 +1233,7 @@ static void init_read(unsigned int buffer_size)
     if (!buffers)
     {
         fprintf(stderr, "Out of memory\n");
-
+        perror("Out of memory");
         exit(EXIT_FAILURE);
     }
 
@@ -1248,7 +1243,7 @@ static void init_read(unsigned int buffer_size)
     if (!buffers[0].start)
     {
         fprintf(stderr, "Out of memory\n");
-
+        perror("Out of memory");
         exit(EXIT_FAILURE);
     }
 }
@@ -1269,7 +1264,7 @@ static void init_mmap(void)
         {
             fprintf(stderr, "%s does not support "
                 "memory mapping\n", dev_name);
-
+            perror("initmmap");
             exit(EXIT_FAILURE);
         }
         else
@@ -1281,7 +1276,7 @@ static void init_mmap(void)
     if (req.count < 2)
     {
         fprintf(stderr, "Insufficient buffer memory on %s\n", dev_name);
-
+        perror("initmmap");
         exit(EXIT_FAILURE);
     }
 
@@ -1290,7 +1285,7 @@ static void init_mmap(void)
     if (!buffers)
     {
         fprintf(stderr, "Out of memory\n");
-
+        perror("init_mmap");
         exit(EXIT_FAILURE);
     }
 
@@ -1333,7 +1328,8 @@ static void init_userp(unsigned int buffer_size)
         if (EINVAL == errno) {
             fprintf(stderr, "%s does not support "
                 "user pointer i/o\n", dev_name);
-
+            perror("%s does not support "
+                "user pointer i/o");
             exit(EXIT_FAILURE);
         }
         else {
@@ -1345,7 +1341,7 @@ static void init_userp(unsigned int buffer_size)
 
     if (!buffers) {
         fprintf(stderr, "Out of memory\n");
-
+        perror("init_userp");
         exit(EXIT_FAILURE);
     }
 
@@ -1355,7 +1351,7 @@ static void init_userp(unsigned int buffer_size)
 
         if (!buffers[n_buffers].start) {
             fprintf(stderr, "Out of memory\n");
-
+            perror("Out of memory");
             exit(EXIT_FAILURE);
         }
     }
@@ -1373,7 +1369,7 @@ static void init_device(void)
         if (EINVAL == errno) {
             fprintf(stderr, "%s is no V4L2 device\n",
                 dev_name);
-
+            perror("%s is no V4L2 device\n");
             exit(EXIT_FAILURE);
         }
         else
@@ -1386,7 +1382,7 @@ static void init_device(void)
     {
         fprintf(stderr, "%s is no video capture device\n",
             dev_name);
-
+        perror("init_device");
         exit(EXIT_FAILURE);
     }
 
@@ -1397,7 +1393,7 @@ static void init_device(void)
         {
             fprintf(stderr, "%s does not support read i/o\n",
                 dev_name);
-
+            perror("init_device");
             exit(EXIT_FAILURE);
         }
         break;
@@ -1408,7 +1404,7 @@ static void init_device(void)
         {
             fprintf(stderr, "%s does not support streaming i/o\n",
                 dev_name);
-
+            perror("init_device");
             exit(EXIT_FAILURE);
         }
         break;
@@ -1527,13 +1523,13 @@ static void open_device(void)
     if (-1 == stat(dev_name, &st)) {
         fprintf(stderr, "Cannot identify '%s': %d, %s\n",
             dev_name, errno, strerror(errno));
-
+        perror("open_device");
         exit(EXIT_FAILURE);
     }
 
     if (!S_ISCHR(st.st_mode)) {
         fprintf(stderr, "%s is no device\n", dev_name);
-
+        perror("open_device");
         exit(EXIT_FAILURE);
     }
 
@@ -1542,7 +1538,7 @@ static void open_device(void)
     if (-1 == fd) {
         fprintf(stderr, "Cannot open '%s': %d, %s\n",
             dev_name, errno, strerror(errno));
-
+        perror("open_device");
         exit(EXIT_FAILURE);
     }
 }
@@ -1647,11 +1643,11 @@ void print_scheduler(void)
     }
 }
 
-void* S0_sequencer(void* threadp)
+void S0_sequencer(int sigNum)
 {
     struct timespec current_time_val;
     //double current_realtime;
-    int rc, flags = 0;
+    int flags = 0;
     int i;
 
     ///< Entering here means we received interval timer signal
@@ -1718,7 +1714,7 @@ void* S1_frame_acquisition(void* threadp)
     double current_realtime;
     double current_realtime_last;
     unsigned long long S1Cnt = 0;
-    threadParams_t* threadParams = (threadParams_t*)threadp;
+    //threadParams_t* threadParams = (threadParams_t*)threadp;
 
     ///< Start up processing and resource initialization
     clock_gettime(MY_CLOCK, &current_time_val);
@@ -1751,7 +1747,7 @@ void* S2_frame_difference_threshold(void* threadp)
     double current_realtime;
     double current_realtime_last;
     unsigned long long S2Cnt = 0;
-    threadParams_t* threadParams = (threadParams_t*)threadp;
+    //threadParams_t* threadParams = (threadParams_t*)threadp;
 
     ///< Start up processing and resource initialization
     clock_gettime(MY_CLOCK, &current_time_val);
@@ -1785,7 +1781,7 @@ void* S3_frame_select(void* threadp)
     double current_realtime;
     double current_realtime_last;
     unsigned long long S3Cnt = 0;
-    threadParams_t* threadParams = (threadParams_t*)threadp;
+    //threadParams_t* threadParams = (threadParams_t*)threadp;
 
     ///< Start up processing and resource initialization
     clock_gettime(MY_CLOCK, &current_time_val);
@@ -1819,7 +1815,7 @@ void* S4_frame_process(void* threadp)
     double current_realtime;
     double current_realtime_last;
     unsigned long long S4Cnt = 0;
-    threadParams_t* threadParams = (threadParams_t*)threadp;
+    //threadParams_t* threadParams = (threadParams_t*)threadp;
 
     ///< Start up processing and resource initialization
     clock_gettime(MY_CLOCK, &current_time_val);
@@ -1853,7 +1849,7 @@ void* S5_frame_writeback(void* threadp)
     double current_realtime;
     double current_realtime_last;
     unsigned long long S5Cnt = 0;
-    threadParams_t* threadParams = (threadParams_t*)threadp;
+    //threadParams_t* threadParams = (threadParams_t*)threadp;
 
     ///< Start up processing and resource initialization
     clock_gettime(MY_CLOCK, &current_time_val);
@@ -1945,6 +1941,7 @@ int main(int argc, char** argv)
 
         default:
             usage(stderr, argc, argv);
+            perror("main");
             exit(EXIT_FAILURE);
         }
     }
@@ -1957,16 +1954,14 @@ int main(int argc, char** argv)
     /*************************************************************************
      * Insert my code below
      *************************************************************************/
-    char sys_buffer[SYS_BUF_SIZE];
     cpu_set_t allcpuset;
     cpu_set_t threadcpu;
-    double current_time;
     int cpuidx;
     int flags = 0;
     int i;
     int rc;
     int rt_max_prio;
-    int rt_min_prio;
+    //int rt_min_prio;
     struct timespec current_time_val;
     struct timespec current_time_res;
     double current_realtime;
@@ -2006,7 +2001,7 @@ int main(int argc, char** argv)
 
     ///< Grab and store min and max priorities from SCHED_FIFO scheduler
     rt_max_prio = sched_get_priority_max(SCHED_FIFO);
-    rt_min_prio = sched_get_priority_min(SCHED_FIFO);
+    //rt_min_prio = sched_get_priority_min(SCHED_FIFO);
 
     rc = sched_getparam(getpid(), &main_param);
 
@@ -2046,7 +2041,7 @@ int main(int argc, char** argv)
         rc = sem_init(&sem[i], 0, 0);
         if (rc > EXIT_SUCCESS) {
             printf("Failed to initialize sem[%d]\n", i);
-            exit(EXIT_FAILURE_N);
+            //exit(EXIT_FAILURE_N);
         }
         else {
             printf("sem[%d] initialized\n", i);
@@ -2059,7 +2054,7 @@ int main(int argc, char** argv)
         rc = pthread_attr_init(&rt_sched_attr[i]);
         if (rc < EXIT_SUCCESS) {
             printf("Failed to initialize rt_sched_attr[%d]\n", i);
-            exit(EXIT_FAILURE);
+            //exit(EXIT_FAILURE);
         }
         else {
             printf("rt_sched_attr[%d] initialized\n", i);
@@ -2069,7 +2064,7 @@ int main(int argc, char** argv)
         rc = pthread_attr_setinheritsched(&rt_sched_attr[i], PTHREAD_EXPLICIT_SCHED);
         if (rc < EXIT_SUCCESS) {
             printf("Failed to set inherit sched for rt_sched_attr[%d]\n", i);
-            exit(EXIT_FAILURE);
+            //exit(EXIT_FAILURE);
         }
         else {
             printf("rt_sched_attr[%d] inherit sched set to PTHREAD_EXPLICIT_SCHED\n", i);
@@ -2077,7 +2072,7 @@ int main(int argc, char** argv)
         rc = pthread_attr_setschedpolicy(&rt_sched_attr[i], SCHED_FIFO);
         if (rc < EXIT_SUCCESS) {
             printf("Failed to set scheduling policy for rt_sched_attr[%d] to SCHED_FIFO\n", i);
-            exit(EXIT_FAILURE);
+            //exit(EXIT_FAILURE);
         }
         else {
             printf("rt_sched_attr[%d] scheduling policy set to SCHED_FIFO\n", i);
@@ -2087,7 +2082,7 @@ int main(int argc, char** argv)
         rc = pthread_attr_setaffinity_np(&rt_sched_attr[i], sizeof(cpu_set_t), &threadcpu);
         if (rc < EXIT_SUCCESS) {
             printf("Failed to set core affinity for rt_sched_attr[%d] to %d\n", i, cpuidx);
-            exit(EXIT_FAILURE);
+            //exit(EXIT_FAILURE);
         }
         else {
             printf("rt_sched_attr[%d] core affinity set to %d\n", i, cpuidx);
@@ -2098,7 +2093,7 @@ int main(int argc, char** argv)
         rc = pthread_attr_setschedparam(&rt_sched_attr[i], &rt_param[i]);
         if (rc < EXIT_SUCCESS) {
             printf("Failed to set scheduling priority for rt_sched_attr[%d] to %d/%d\n", i, rt_param[i].sched_priority, rt_max_prio);
-            exit(EXIT_FAILURE);
+            //exit(EXIT_FAILURE);
         }
         else {
             printf("rt_sched_attr[%d] scheduling priority set to %d/%d\n", i, rt_param[i].sched_priority, rt_max_prio);
@@ -2121,7 +2116,7 @@ int main(int argc, char** argv)
     );
     if (rc < EXIT_SUCCESS) {
         printf("Failed to create thread[%d] tied to S1 Frame Acquisition\n", S1);
-        exit(EXIT_FAILURE);
+        //exit(EXIT_FAILURE);
     }
     else {
         printf("Created thread[%d] tied to S1 Frame Acquisition\n", S1);
@@ -2135,7 +2130,7 @@ int main(int argc, char** argv)
     );
     if (rc < EXIT_SUCCESS) {
         printf("Failed to create thread[%d] tied to S2 Frame Difference Threshold\n", S2);
-        exit(EXIT_FAILURE);
+        //exit(EXIT_FAILURE);
     }
     else {
         printf("Created thread[%d] tied to S2 Frame Difference Threshold\n", S2);
@@ -2149,7 +2144,7 @@ int main(int argc, char** argv)
     );
     if (rc < EXIT_SUCCESS) {
         printf("Failed to create thread[%d] tied to S3 Frame Select\n", S3);
-        exit(EXIT_FAILURE);
+        //exit(EXIT_FAILURE);
     }
     else {
         printf("Created thread[%d] tied to S3 Frame Select\n", S3);
@@ -2163,7 +2158,7 @@ int main(int argc, char** argv)
     );
     if (rc < EXIT_SUCCESS) {
         printf("Failed to create thread[%d] tied to S4 Frame Process\n", S4);
-        exit(EXIT_FAILURE);
+        //exit(EXIT_FAILURE);
     }
     else {
         printf("Created thread[%d] tied to S4 Frame Process\n", S4);
@@ -2177,7 +2172,7 @@ int main(int argc, char** argv)
     );
     if (rc < EXIT_SUCCESS) {
         printf("Failed to create thread[%d] tied to S5 Frame Write-Back\n", S5);
-        exit(EXIT_FAILURE);
+        //exit(EXIT_FAILURE);
     }
     else {
         printf("Created thread[%d] tied to S5 Frame Write-Back\n", S5);
@@ -2216,10 +2211,8 @@ int main(int argc, char** argv)
         }
     }
 
-    struct timespec frame_time;
-    int j, newi;
-    unsigned char* pptr = bigbuffer_read;
-    unsigned int diff;
+
+
     printf("\n");
     printf("S1_frame_acquisition:    framecnt_read = %d\n", framecnt_read);
     printf("S2_frame_diff_threshold: framecnt_diff_threshold = %d\n", framecnt_diff_threshold);
@@ -2232,7 +2225,9 @@ int main(int argc, char** argv)
 
 
     ///< Test loop for S1_frame_acquisition
-    //pptr = bigbuffer_read;
+    //unsigned char* pptr = bigbuffer_read;
+    //int j, newi;
+    //struct timespec frame_time;
     //for (j = 0; j < framecnt_read; j++) {
     //    for (i = 0, newi = 0; i < size_buf_read[j]; i = i + 4, newi = newi + 2)
     //    {
@@ -2253,7 +2248,9 @@ int main(int argc, char** argv)
     //}
 
     ///< Test loop for S2_difference_threshold - bigbuffer_read
-    //pptr = bigbuffer_read;
+    //unsigned char* pptr = bigbuffer_read;
+    //int j, newi;
+    //unsigned int diff;
     //for (i = 0; i < framecnt_read; i++) {
     //    //diff = (unsigned int)pptr[i * PHOTO_RES] - (unsigned int)pptr[(i + 1) * PHOTO_RES];
     //    diff = 0;
@@ -2281,6 +2278,8 @@ int main(int argc, char** argv)
 
     ///< Test loop for S3_frame_select
     //pptr = bigbuffer_select;
+    //int j, newi;
+    //struct timespec frame_time;
     //for (j = 0; j < framecnt_select; j++) {
     //    syslog(LOG_INFO, "FinalProject (S3_frame_select):                MAIN size_buf_select[%d] = %d", j, size_buf_select[j]);
     //    for (i = 0, newi = 0; i < size_buf_select[j]; i = i + 4, newi = newi + 2)
@@ -2310,6 +2309,8 @@ int main(int argc, char** argv)
 
     ///< Test loop for S4_frame_process
     //pptr = bigbuffer_process;
+    //int j, newi;
+    //struct timespec frame_time;
     //for (j = 0; j < framecnt_process; j++) {
     //    syslog(LOG_INFO, "FinalProject (S4_frame_process):               MAIN size_buf_process[%d] = %d", j, size_buf_process[j]);
     //
@@ -2345,7 +2346,7 @@ int main(int argc, char** argv)
 
     //printf("Ending Synchronome Project... writing syslog trace to ./syslog_trace_%02dmin.txt\n\n", S0_RUN_TIME_MIN);
     printf("\n");
-    printf("Ending Synchronome Project... review syslog trace\n\n", S0_RUN_TIME_MIN);
+    printf("Ending Synchronome Project... review syslog trace\n\n");
 
 
     ///< Calculate number of lines to tail from syslog in relation to S0_RUN_TIME_MIN
@@ -2357,13 +2358,13 @@ int main(int argc, char** argv)
 
     //system(sys_buffer);
 
-    printf("Use below commands to manually view & generate syslog_trace_manual.txt for this session:\n");
-    printf("\t1. tail -X /var/log/syslog | grep -n FinalProject\n");
-    printf("\t\t- Estimate X based on runtime. For example, X is ~25888 for 3 min and ~258754 for 30 min\n");
-    printf("\t\t- This is used to grab start + end line numbers of trace to store into file based on trace times\n");
-    printf("\t2. tail -Y /var/log/syslog > ./syslog_trace_manual.txt | grep -n FinalProject\n");
-    printf("\t\t- Where Y is the exact beginning line number to begin storing into txt file\n");
-    printf("\n");
+    //printf("Use below commands to manually view & generate syslog_trace_manual.txt for this session:\n");
+    //printf("\t1. tail -X /var/log/syslog | grep -n FinalProject\n");
+    //printf("\t\t- Estimate X based on runtime. For example, X is ~25888 for 3 min and ~258754 for 30 min\n");
+    //printf("\t\t- This is used to grab start + end line numbers of trace to store into file based on trace times\n");
+    //printf("\t2. tail -Y /var/log/syslog > ./syslog_trace_manual.txt | grep -n FinalProject\n");
+    //printf("\t\t- Where Y is the exact beginning line number to begin storing into txt file\n");
+    //printf("\n");
 
     return 0;
 }

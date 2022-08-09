@@ -1,1 +1,0 @@
-clear; tail -99999 /var/log/syslog | grep -n -e "S5_frame_writeback"

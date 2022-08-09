@@ -1,1 +1,0 @@
-clear; tail -99999 /var/log/syslog | grep -n -e -a "S1_frame_acquisition"
