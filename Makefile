@@ -3,7 +3,7 @@ LIB_DIRS =
 CC=gcc
 
 CDEFS=
-CFLAGS= -O0 -g $(INCLUDE_DIRS) $(CDEFS)
+CFLAGS= -O0 -Wall -g $(INCLUDE_DIRS) $(CDEFS)
 LIBS= -lrt -lpthread
 
 HFILES= 
